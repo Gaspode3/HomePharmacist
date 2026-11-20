@@ -1,0 +1,46 @@
+rules_version = '2';
+// Правила доступу: аптечку бачать і змінюють лише адреси зі списку members.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email != null
+             && request.auth.token.email_verified == true;
+    }
+    function myEmail() { return request.auth.token.email.lower(); }
+    function hh(hid) { return get(/databases/$(database)/documents/households/$(hid)).data; }
+    function hhAfter(hid) { return getAfter(/databases/$(database)/documents/households/$(hid)).data; }
+    function isMember(hid) { return signedIn() && myEmail() in hh(hid).members; }
+    function isOwnerAfter(hid) { return signedIn() && hhAfter(hid).owner == request.auth.uid; }
+
+    // Аптечка (домогосподарство)
+    match /households/{hid} {
+      allow get: if signedIn() && myEmail() in resource.data.members;
+      allow create: if signedIn()
+        && request.resource.data.owner == request.auth.uid
+        && request.resource.data.ownerEmail == myEmail()
+        && request.resource.data.members == [myEmail()];
+      // власник може змінювати назву і список людей, але не передати власність
+      allow update: if signedIn() && resource.data.owner == request.auth.uid
+        && request.resource.data.owner == resource.data.owner
+        && request.resource.data.ownerEmail == resource.data.ownerEmail
+        && myEmail() in request.resource.data.members;
+      allow delete: if false;
+
+      match /meds/{id} {
+        allow read, write: if isMember(hid);
+      }
+      match /barcodes/{code} {
+        allow read, write: if isMember(hid);
+      }
+    }
+
+    // Запрошення: адреса → до якої аптечки має доступ
+    match /invites/{email} {
+      allow get: if signedIn() && myEmail() == email;
+      allow create, update: if isOwnerAfter(request.resource.data.hid)
+        && email in hhAfter(request.resource.data.hid).members;
+      allow delete: if signedIn() && get(/databases/$(database)/documents/households/$(resource.data.hid)).data.owner == request.auth.uid;
+    }
+  }
+}

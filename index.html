@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Аптечка">
+<title>Домашній фармацевт</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Завантаження -->
+  <section class="screen" id="s-loading"><div class="empty"><span class="spin"></span>Завантаження…</div></section>
+
+  <!-- Firebase не налаштовано -->
+  <section class="screen" id="s-setup" hidden>
+    <div class="hero"><div class="logo"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+      <h1>Домашній фармацевт</h1><p>Додаток ще не підключено до бази даних.</p></div>
+    <div class="panel"><p class="muted" style="margin:0">Заповніть <span class="mono">js/firebase-config.js</span> — інструкція в README репозиторію.</p></div>
+  </section>
+
+  <!-- Вхід -->
+  <section class="screen" id="s-login" hidden>
+    <div class="hero"><div class="logo"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+      <h1>Домашній фармацевт</h1><p>Спільна сімейна аптечка: що є вдома, що протерміновано і чи є аналог призначених ліків.</p></div>
+    <button class="btn gbtn" id="btnLogin">
+      <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
+      Увійти через Google</button>
+    <div class="status err" id="loginErr"></div>
+  </section>
+
+  <!-- Немає доступу до аптечки -->
+  <section class="screen" id="s-join" hidden>
+    <div class="panel">
+      <h2>Вітаю!</h2>
+      <p class="sub">Ви увійшли як <b id="joinEmail"></b>. Ця адреса ще не додана до жодної аптечки.</p>
+      <p class="muted">Якщо аптечку вже створив хтось із сім'ї — попросіть його додати вашу адресу в меню «⋯ → Сім'я», потім натисніть «Перевірити знову».</p>
+      <button class="btn ghost" id="btnRecheck" style="margin-bottom:10px">Перевірити знову</button>
+      <button class="btn" id="btnCreate">Створити нову аптечку</button>
+      <button class="linkbtn" id="btnLogout1" style="margin-top:6px">Вийти з акаунта</button>
+    </div>
+  </section>
+
+  <!-- Основний додаток -->
+  <div id="s-app" hidden>
+    <header>
+      <div class="hrow">
+        <div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+        <h1 id="hhName">Домашній фармацевт</h1>
+        <button class="iconbtn" id="menuBtn" aria-label="Меню"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+      </div>
+      <div class="stats">
+        <button class="stat" data-goto="all"><b id="stTotal">–</b><span>усього</span></button>
+        <button class="stat red" data-goto="expired"><b id="stExpired">–</b><span>протерміновано</span></button>
+        <button class="stat amber" data-goto="soon"><b id="stSoon">–</b><span>скоро спливає</span></button>
+      </div>
+      <div class="banner" id="banner"></div>
+    </header>
+
+    <!-- АПТЕЧКА -->
+    <section id="view-list">
+      <div class="search">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5d6b67" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="q" type="search" placeholder="Назва, діюча речовина, для чого…" autocomplete="off">
+      </div>
+      <div class="chips" id="chips"></div>
+      <div class="list" id="list"><div class="empty"><span class="spin"></span>Завантаження…</div></div>
+    </section>
+
+    <!-- ДОДАТИ -->
+    <section id="view-add" hidden>
+      <div class="panel">
+        <h2 id="addTitle">Додати ліки</h2>
+        <p class="sub">Наведіть камеру на штрих-код або квадратний DataMatrix — з DataMatrix одразу зчитається термін придатності. Відомі препарати заповнюються автоматично.</p>
+        <div class="bigbtns">
+          <button class="bigbtn" id="btnScan" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V4h3M21 7V4h-3M3 17v3h3M21 17v3h-3M7 8v8M10 8v8M13 8v8M16 8v8"/></svg>
+            Сканувати код
+          </button>
+          <button class="bigbtn" id="btnOcr" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+            Дата з фото
+          </button>
+        </div>
+        <div class="smallbtns"><button class="linkbtn" id="btnCodePhoto" type="button">Код із фото / галереї</button></div>
+        <div class="status" id="capStatus"></div>
+      </div>
+
+      <form class="panel" id="medForm" autocomplete="off">
+        <div class="field"><label for="f-name">Назва *</label><input id="f-name" required placeholder="Нурофєн" list="brands"></div>
+        <div class="field"><label for="f-inn">Діюча речовина (через кому)</label><input id="f-inn" placeholder="ібупрофен">
+          <div class="dup" id="dupHint"></div></div>
+        <div class="row2">
+          <div class="field"><label for="f-strength">Дозування</label><input id="f-strength" placeholder="200 мг"></div>
+          <div class="field"><label for="f-form">Форма</label><input id="f-form" placeholder="таблетки" list="forms"></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label for="f-expiry">Придатний до</label><input id="f-expiry" placeholder="03.2027" inputmode="numeric">
+            <div class="hint" id="expHint">ММ.РРРР або ДД.ММ.РРРР</div></div>
+          <div class="field"><label for="f-qty">Кількість</label><input id="f-qty" placeholder="20 таб."></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label for="f-category">Для чого</label><input id="f-category" placeholder="знеболювальне" list="cats"></div>
+          <div class="field"><label for="f-location">Де лежить</label><input id="f-location" placeholder="аптечка, холодильник…" list="locs"></div>
+        </div>
+        <div class="field"><label for="f-notes">Нотатки</label><textarea id="f-notes" rows="2" placeholder="Кому призначали, як приймати…"></textarea></div>
+        <div class="field"><label for="f-barcode">Штрих-код</label><input id="f-barcode" inputmode="numeric" placeholder="заповниться при скануванні"></div>
+        <div class="btnrow">
+          <button type="button" class="btn ghost" id="btnClear">Очистити</button>
+          <button type="submit" class="btn" id="btnSave">Зберегти</button>
+        </div>
+      </form>
+      <datalist id="brands"></datalist>
+      <datalist id="forms"><option>таблетки</option><option>капсули</option><option>сироп</option><option>краплі</option><option>мазь</option><option>гель</option><option>спрей</option><option>розчин для ін'єкцій</option><option>порошок</option><option>супозиторії</option></datalist>
+      <datalist id="cats"><option>знеболювальне</option><option>жарознижувальне</option><option>антибіотик</option><option>протиалергічне</option><option>від шлунку</option><option>сорбент</option><option>антисептик</option><option>від тиску</option><option>вітаміни</option><option>від кашлю</option><option>від нежиті</option></datalist>
+      <datalist id="locs"></datalist>
+    </section>
+
+    <!-- ПРИЗНАЧЕННЯ -->
+    <section id="view-rx" hidden>
+      <div class="panel">
+        <h2>Призначення лікаря</h2>
+        <p class="sub">Впишіть призначені ліки, кожен з нового рядка. Перевірю, чи є вдома препарати з такою ж діючою речовиною.</p>
+        <div class="field"><textarea id="rx-text" rows="4" placeholder="Аугментин 875/125 по 1 таб 2 р/д&#10;Ібупрофен 400 мг при болю&#10;Лоратадин 10 мг"></textarea></div>
+        <button class="btn" id="btnAnalyze">Перевірити аптечку</button>
+      </div>
+      <div id="rxResult"></div>
+    </section>
+  </div>
+</div>
+
+<nav class="tabs" id="tabs" hidden><div class="tabsin">
+  <button class="tab on" data-tab="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M12 10.5v6M9 13.5h6"/></svg>Аптечка</button>
+  <button class="tab" data-tab="add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>Додати</button>
+  <button class="tab" data-tab="rx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M6 3h9l4 4v14H6z"/><path d="M9 11h7M9 15h7M9 7h3"/></svg>Призначення</button>
+</div></nav>
+
+<div class="overlay" id="overlay" hidden><div class="sheet" id="sheet"></div></div>
+<div class="scanner" id="scanner" hidden>
+  <video id="scanVideo" playsinline muted></video>
+  <div class="frame"></div>
+  <div class="bar"><p id="scanHint">Наведіть на штрих-код або DataMatrix</p>
+    <button class="btn" id="scanClose" style="background:#fff;color:#000">Закрити</button></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<input type="file" id="inCodePhoto" accept="image/*" hidden>
+<input type="file" id="inOcr" accept="image/*" capture="environment" hidden>
+
+<script type="module" src="js/app.js"></script>
+<script>
+  if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+</script>
+</body>
+</html>
