@@ -140,13 +140,15 @@ async function toJpegB64(file, max = 1600){
     const c = document.createElement("canvas");
     c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
     c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-    return c.toDataURL("image/jpeg", 0.88).split(",")[1];
+    const data = c.toDataURL("image/jpeg", 0.88).split(",")[1];
+    if (!data) throw new Error("image-encode");
+    return data;
   } finally { URL.revokeObjectURL(url); }
 }
 // prompt — інструкція; files — фото. Повертає розібраний JSON.
 export async function aiJson(prompt, files){
   const { m, ai } = await getAI();
-  const images = await Promise.all([...files].slice(0, 4).map(toJpegB64));
+  const images = await Promise.all([...files].slice(0, 4).map(f => toJpegB64(f)));
   const parts = [prompt, ...images.map(data => ({ inlineData: { data, mimeType: "image/jpeg" } }))];
   let lastErr;
   for (const name of AI_MODELS) {
