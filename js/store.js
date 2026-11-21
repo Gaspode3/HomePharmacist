@@ -132,23 +132,28 @@ async function getAI(){
   return { m: aiMod, ai: aiInst };
 }
 // Зменшити фото до ~1600 px і JPEG — менше трафіку й квоти, якість для тексту достатня.
-async function toJpegB64(file, max = 1600){
+async function toJpegB64(file, max = 1600, mirror = false){
   const url = URL.createObjectURL(file);
   try {
     const img = new Image(); img.src = url; await img.decode();
     const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
     const c = document.createElement("canvas");
     c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
-    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    const ctx = c.getContext("2d");
+    if (mirror) { ctx.translate(c.width, 0); ctx.scale(-1, 1); }   // дзеркальна копія — для дат, вибитих тисненням зі зворотного боку
+    ctx.drawImage(img, 0, 0, c.width, c.height);
     const data = c.toDataURL("image/jpeg", 0.88).split(",")[1];
     if (!data) throw new Error("image-encode");
     return data;
   } finally { URL.revokeObjectURL(url); }
 }
 // prompt — інструкція; files — фото. Повертає розібраний JSON.
-export async function aiJson(prompt, files){
+// opts.mirror — до кожного фото додати його дзеркальну копію (рельєфні дати, видимі зі звороту)
+export async function aiJson(prompt, files, opts = {}){
   const { m, ai } = await getAI();
-  const images = await Promise.all([...files].slice(0, 4).map(f => toJpegB64(f)));
+  const list = [...files].slice(0, opts.mirror ? 2 : 4);
+  const images = (await Promise.all(list.map(f => opts.mirror
+    ? Promise.all([toJpegB64(f), toJpegB64(f, 1600, true)]) : toJpegB64(f).then(x => [x])))).flat();
   const parts = [prompt, ...images.map(data => ({ inlineData: { data, mimeType: "image/jpeg" } }))];
   let lastErr;
   for (const name of AI_MODELS) {

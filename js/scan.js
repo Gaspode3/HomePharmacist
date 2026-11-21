@@ -173,7 +173,7 @@ export function pickExpiry(text){
 }
 
 // Підготовка фото: зменшити/збільшити до зручного розміру, сірий, розтягнути контраст, повернути.
-function prepCanvas(img, rot){
+function prepCanvas(img, rot, mirror){
   const W = img.naturalWidth, H = img.naturalHeight;
   const k = Math.min(2.5, 2000 / Math.max(W, H));
   const w = Math.round(W * k), h = Math.round(H * k);
@@ -182,6 +182,7 @@ function prepCanvas(img, rot){
   c.width = swap ? h : w; c.height = swap ? w : h;
   const ctx = c.getContext("2d", { willReadFrequently: true });
   ctx.translate(c.width / 2, c.height / 2); ctx.rotate(rot * Math.PI / 180);
+  if (mirror) ctx.scale(-1, 1);
   ctx.drawImage(img, -w / 2, -h / 2, w, h);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   const d = ctx.getImageData(0, 0, c.width, c.height), px = d.data;
@@ -221,13 +222,14 @@ export async function ocrPhoto(file, onProgress, enough){
     if (raw) dm = parseGS1(raw);
     onProgress && onProgress(0, "Завантажую розпізнавання…");
     const w = await getWorker();
-    const passes = [[0, "11"], [90, "11"], [270, "11"], [0, "6"], [180, "11"]];
+    // останні проходи — дзеркальні: рельєфна дата, видима зі звороту фольги
+    const passes = [[0, "11"], [90, "11"], [270, "11"], [0, "6"], [180, "11"], [0, "11", true], [90, "11", true], [270, "11", true]];
     const texts = [];
     for (let i = 0; i < passes.length; i++) {
-      const [rot, psm] = passes[i];
+      const [rot, psm, mir] = passes[i];
       progressCb = p => onProgress && onProgress(Math.round(((i + p) / passes.length) * 100), "Читаю текст…");
       await w.setParameters({ tessedit_pageseg_mode: psm });
-      const res = await w.recognize(prepCanvas(r.img, rot));
+      const res = await w.recognize(prepCanvas(r.img, rot, mir));
       texts.push(res && res.data ? res.data.text : "");
       if (enough && enough(texts.join("\n"), dm)) break;
     }
