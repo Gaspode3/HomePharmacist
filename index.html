@@ -18,7 +18,10 @@
 <div class="wrap">
 
   <!-- Завантаження -->
-  <section class="screen" id="s-loading"><div class="empty"><span class="spin"></span>Завантаження…</div></section>
+  <section class="screen" id="s-loading"><div class="empty"><span class="spin"></span>Завантаження…
+    <div id="bootErr" class="status err" style="margin-top:16px;text-align:left" hidden></div>
+    <div id="bootFix" hidden style="margin-top:12px"><button class="btn" id="btnReload">Оновити</button>
+      <button class="linkbtn" id="btnReset">Скинути збережені файли сайту й оновити</button></div></div></section>
 
   <!-- Firebase не налаштовано -->
   <section class="screen" id="s-setup" hidden>
@@ -153,6 +156,33 @@
 <input type="file" id="inCodePhoto" accept="image/*" hidden>
 <input type="file" id="inOcr" accept="image/*" capture="environment" hidden>
 
+<script>
+  // Якщо щось зламалося під час запуску — показати причину, а не вічне «Завантаження…»
+  (function(){
+    function fail(msg){
+      var e = document.getElementById("bootErr"), f = document.getElementById("bootFix");
+      if (!e || document.getElementById("s-loading").hidden) return;
+      e.hidden = false; f.hidden = false; e.textContent = "Не вдалося запустити: " + msg;
+    }
+    window.__bootFail = fail;
+    addEventListener("error", function(ev){
+      var t = ev.target;
+      if (t && t.tagName && t.tagName !== "SCRIPT") return;   // шрифти, картинки — не критично
+      fail(ev.message || (t && t.src ? "не завантажився " + t.src : "помилка завантаження"));
+    }, true);
+    addEventListener("unhandledrejection", function(ev){ fail(String(ev.reason && (ev.reason.message || ev.reason) || "помилка")); });
+    setTimeout(function(){ if (!window.__booted) fail("сайт не відповідає понад 20 с. Перевірте інтернет."); }, 20000);
+    document.addEventListener("click", function(ev){
+      if (ev.target.id === "btnReload") location.reload();
+      if (ev.target.id === "btnReset") {
+        var p = [];
+        if (navigator.serviceWorker) p.push(navigator.serviceWorker.getRegistrations().then(function(r){ return Promise.all(r.map(function(x){ return x.unregister(); })); }));
+        if (window.caches) p.push(caches.keys().then(function(k){ return Promise.all(k.map(function(x){ return caches.delete(x); })); }));
+        Promise.all(p).finally(function(){ location.reload(); });
+      }
+    });
+  })();
+</script>
 <script type="module" src="js/app.js"></script>
 <script>
   if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));

@@ -10,6 +10,7 @@ const toList = v => Array.isArray(v) ? v.map(String).map(s => s.trim()).filter(B
 let toastT;
 function toast(msg){ const t = $("#toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("on"), 2600); }
 function show(id){
+  if (id !== "s-loading") window.__booted = true;
   ["s-loading", "s-setup", "s-login", "s-join", "s-app"].forEach(s => { $("#" + s).hidden = s !== id; });
   $("#tabs").hidden = id !== "s-app";
 }

@@ -15,13 +15,6 @@ export async function init(){
   ]);
   fb = { ...a, ...au, ...fs };
   app = fb.initializeApp(firebaseConfig);
-  // App Check (reCAPTCHA / Fraud Defense) — захищає безкоштовний ліміт Gemini від чужих сайтів
-  if (firebaseConfig.recaptchaSiteKey) {
-    try {
-      const ac = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-app-check.js`);
-      ac.initializeAppCheck(app, { provider: new ac.ReCaptchaEnterpriseProvider(firebaseConfig.recaptchaSiteKey), isTokenAutoRefreshEnabled: true });
-    } catch (e) { console.warn("App Check", e); }
-  }
   auth = fb.getAuth(app);
   try {
     db = fb.initializeFirestore(app, { localCache: fb.persistentLocalCache({ tabManager: fb.persistentMultipleTabManager() }) });
@@ -108,7 +101,16 @@ export function setCode(hid, code, prod){
 // Моделі по черзі: якщо одна недоступна/перевантажена — пробуємо наступну.
 export const AI_MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-3.5-flash-lite"];
 let aiMod = null, aiInst = null;
+let appCheckOn = false;
+// App Check вмикаємо лише перед першим запитом до ШІ — щоб проблеми з reCAPTCHA не заважали відкривати сайт.
+async function ensureAppCheck(){
+  if (appCheckOn || !firebaseConfig.recaptchaSiteKey) return;
+  const ac = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-app-check.js`);
+  ac.initializeAppCheck(app, { provider: new ac.ReCaptchaEnterpriseProvider(firebaseConfig.recaptchaSiteKey), isTokenAutoRefreshEnabled: false });
+  appCheckOn = true;
+}
 async function getAI(){
+  await ensureAppCheck();
   if (!aiMod) aiMod = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-ai.js`);
   if (!aiInst) aiInst = aiMod.getAI(app, { backend: new aiMod.GoogleAIBackend() });
   return { m: aiMod, ai: aiInst };
