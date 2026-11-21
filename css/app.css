@@ -171,3 +171,5 @@
   .rec .rt{flex:1} .rec a{color:var(--accent);font-weight:700}
   .lotline button.mv{background:var(--accent-soft);color:var(--accent)}
   .sheet .btn.ghost + .btn.ghost{margin-top:0}
+  .dupgrp{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--line);font-size:14px}
+  .dupgrp input{margin-top:4px;width:18px;height:18px;flex:none}

@@ -227,7 +227,82 @@ async function deleteKitYes(id){
   await store.deleteKit(state.hh.id, id);
   closeSheet(); setKit("all"); render(); toast("Аптечку видалено");
 }
-const sameProduct = (a, b) => norm(a.name) === norm(b.name) && norm(a.strength) === norm(b.strength);
+// Ключ препарату: назва без регістру/пробілів/®, є→е, ї→і; дозування — лише цифри й одиниці.
+const prodName = s => norm(String(s || "").replace(/[®™]/g, "")).replace(/є/g, "е").replace(/ї/g, "і").replace(/ґ/g, "г");
+const prodDose = s => String(s || "").toLowerCase().replace(/mg/g, "мг").replace(/ml/g, "мл").replace(/,/g, ".").replace(/[^0-9.\/a-zа-яіїє%]/gi, "");
+const sameProduct = (a, b) => prodName(a.name) === prodName(b.name) && prodDose(a.strength) === prodDose(b.strength);
+// Об'єднати кілька записів одного препарату: партії разом, порожні поля доповнюються.
+function mergeRecords(recs){
+  // найстаріший запис — основний (порівнюємо як рядки ISO, без локалі); новий (без addedAt) — у кінці
+  const key = r => r.addedAt || "\uffff";
+  const sorted = [...recs].sort((x, y) => key(x) < key(y) ? -1 : key(x) > key(y) ? 1 : 0);
+  const base = { ...sorted[0] };
+  for (const r of sorted.slice(1)) {
+    for (const k of ["inn", "innLatin"]) if (!(base[k] || []).length && (r[k] || []).length) base[k] = r[k];
+    for (const k of ["strength", "form", "category", "location", "barcode"]) if (!base[k] && r[k]) base[k] = r[k];
+    if (r.notes && !(base.notes || "").includes(r.notes)) base.notes = [base.notes, r.notes].filter(Boolean).join("; ");
+  }
+  // партії з однаковим терміном зливаються в одну, кількість додається
+  const byExp = new Map();
+  for (const l of sorted.flatMap(lotsOf)) {
+    const k = l.expiry || "—";
+    if (!byExp.has(k)) byExp.set(k, { expiry: l.expiry, qtys: [] });
+    byExp.get(k).qtys.push(l.qty || "");
+  }
+  const lots = [...byExp.values()].map(g => {
+    const q = g.qtys.filter(Boolean);
+    return { expiry: g.expiry, qty: q.length ? q.join(" + ") : (g.qtys.length > 1 ? g.qtys.length + " уп." : "") };
+  });
+  return { ...base, ...normalizeLots(lots) };
+}
+function findDuplicates(){
+  const groups = new Map();
+  for (const m of state.meds) {
+    const k = kitOf(m) + "|" + prodName(m.name) + "|" + prodDose(m.strength);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(m);
+  }
+  const exact = [...groups.values()].filter(g => g.length > 1).map(g => ({ recs: g, sure: true }));
+  // та сама назва, але в одного запису дозування не вказане — ймовірний повтор, на розсуд користувача
+  const byName = new Map();
+  for (const m of state.meds) {
+    const k = kitOf(m) + "|" + prodName(m.name);
+    if (!byName.has(k)) byName.set(k, []);
+    byName.get(k).push(m);
+  }
+  const maybe = [];
+  for (const g of byName.values()) {
+    const doses = new Set(g.map(m => prodDose(m.strength)).filter(Boolean));
+    if (g.length > 1 && doses.size === 1 && g.some(m => !prodDose(m.strength))) maybe.push({ recs: g, sure: false });
+  }
+  const covered = new Set(maybe.flatMap(x => x.recs.map(r => r.id)));
+  return [...exact.filter(x => !x.recs.every(r => covered.has(r.id))), ...maybe];
+}
+function openDuplicates(){
+  const groups = findDuplicates();
+  state.dupGroups = groups;
+  if (!groups.length) { openSheet(`<h3>Повторів не знайдено</h3><p class="muted">Кожен препарат записаний один раз у кожній аптечці.</p><button class="btn" data-act="close">Добре</button>`); return; }
+  openSheet(`<h3>Повтори: ${groups.length}</h3>
+    <p class="muted">Записи одного препарату в одній аптечці. Після об'єднання залишиться один запис з усіма партіями (пластинами).</p>
+    ${groups.map((g, gi) => `<label class="dupgrp"><input type="checkbox" data-dup="${gi}" ${g.sure ? "checked" : ""}>
+      <div><b>${esc(g.recs[0].name)}</b>${g.sure ? "" : ` <span class="badge b-warn">перевірте: в одного запису немає дозування</span>`}
+      <div class="muted">${state.kits.length > 1 ? esc(kitName(kitOf(g.recs[0]))) + " · " : ""}${g.recs.length} записи:</div>
+      ${g.recs.map(r => `<div class="muted">• ${esc([r.strength, r.form, lotsText(r)].filter(Boolean).join(" · ") || "без деталей")}</div>`).join("")}
+      <div class="muted" style="color:var(--accent)">→ буде: ${esc(lotsText(mergeRecords(g.recs)) || "без дати")}</div></div></label>`).join("")}
+    <div class="btnrow" style="margin-top:12px"><button class="btn ghost" data-act="close">Скасувати</button><button class="btn" data-act="dup-merge">Об'єднати вибрані</button></div>`);
+}
+async function mergeSelected(){
+  const picked = [...document.querySelectorAll("[data-dup]:checked")].map(c => state.dupGroups[+c.dataset.dup]);
+  if (!picked.length) { toast("Нічого не вибрано"); return; }
+  let n = 0;
+  for (const g of picked) {
+    const merged = mergeRecords(g.recs);
+    if (!(await saveMed(merged))) continue;
+    for (const r of g.recs) if (r.id !== merged.id) await store.deleteMed(state.hh.id, r.id);
+    n++;
+  }
+  closeSheet(); toast(`Об'єднано: ${n}`);
+}
 // Перенести всі ліки в іншу аптечку (якщо там уже є такі самі — партії об'єднуються)
 async function moveMed(id, target, quiet){
   const m = state.meds.find(x => x.id === id); if (!m || kitOf(m) === target && m.kitId) return;
@@ -403,6 +478,7 @@ function openMenu(){
     ${state.kits.length ? state.kits.map(k => `<div class="member"><span>${k.small ? "🎒" : "🧰"} ${esc(k.name)}${k.default ? " · основна" : ""} · ${state.meds.filter(m => kitOf(m) === k.id).length} ліків</span><button style="background:var(--accent-soft);color:var(--accent)" data-act="kit-edit" data-id="${esc(k.id)}">Змінити</button></div>`).join("") : `<p class="muted">Поки одна аптечка.</p>`}
     <button class="linkbtn" data-act="kit-new">+ Нова аптечка</button>
     <h3 style="margin-top:22px">Дані</h3>
+    <button class="btn ghost" style="margin-bottom:8px" data-act="dups">Знайти й об'єднати повтори</button>
     <p class="muted">Резервна копія всіх ліків у JSON. Імпорт приймає і файл, експортований з версії в Claude.</p>
     <div class="btnrow"><button class="btn ghost" data-act="export">Завантажити копію</button><button class="btn ghost" data-act="import-open">Імпорт</button></div>
     <h3 style="margin-top:22px">Акаунт</h3>
@@ -539,9 +615,15 @@ async function onSubmit(ev){
     ...(state.kits.length ? { kitId: $("#f-kit").value || defaultKitId() } : {}),
     notes: F("notes").value.trim(), barcode: F("barcode").value.trim() };
   $("#btnSave").disabled = true;
-  const ok = await saveMed(med);
+  // Нові ліки, які вже є в цій аптечці, — додаються як ще одна партія до наявного запису
+  let ok, merged = false;
+  if (!state.editingId) {
+    const twin = state.meds.find(x => kitOf(x) === (med.kitId || defaultKitId()) && sameProduct(x, med));
+    if (twin) { ok = await saveMed(mergeRecords([twin, { ...med, id: undefined, addedAt: undefined }])); merged = true; }
+  }
+  if (!merged) ok = await saveMed(med);
   $("#btnSave").disabled = false;
-  if (ok) { toast(state.editingId ? "Зміни збережено" : "Додано в аптечку"); clearForm(); switchTab("list"); }
+  if (ok) { toast(state.editingId ? "Зміни збережено" : merged ? "Такі ліки вже були — додано як ще одну партію" : "Додано в аптечку"); clearForm(); switchTab("list"); }
 }
 
 /* ============ сканування ============ */
@@ -828,6 +910,8 @@ function bindUI(){
       catch { toast("Не вдалося прибрати"); b.disabled = false; }
     }
     if (a === "export") exportData();
+    if (a === "dups") openDuplicates();
+    if (a === "dup-merge") { b.disabled = true; await mergeSelected(); }
     if (a === "import-open") openImport();
     if (a === "import") doImport();
     if (a === "logout") { closeSheet(); store.signOut(); }
