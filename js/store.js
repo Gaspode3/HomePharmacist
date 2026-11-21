@@ -1,7 +1,7 @@
 // Робота з даними. Уся взаємодія з Firebase — лише тут, щоб базу можна було замінити.
 import { firebaseConfig } from "./firebase-config.js";
 
-const V = "11.0.2";
+const V = "12.9.0";
 let fb = null;          // модулі Firebase
 let app, auth, db;
 
@@ -15,6 +15,13 @@ export async function init(){
   ]);
   fb = { ...a, ...au, ...fs };
   app = fb.initializeApp(firebaseConfig);
+  // App Check (reCAPTCHA / Fraud Defense) — захищає безкоштовний ліміт Gemini від чужих сайтів
+  if (firebaseConfig.recaptchaSiteKey) {
+    try {
+      const ac = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-app-check.js`);
+      ac.initializeAppCheck(app, { provider: new ac.ReCaptchaEnterpriseProvider(firebaseConfig.recaptchaSiteKey), isTokenAutoRefreshEnabled: true });
+    } catch (e) { console.warn("App Check", e); }
+  }
   auth = fb.getAuth(app);
   try {
     db = fb.initializeFirestore(app, { localCache: fb.persistentLocalCache({ tabManager: fb.persistentMultipleTabManager() }) });
@@ -95,4 +102,47 @@ export async function getCode(hid, code){
 }
 export function setCode(hid, code, prod){
   return fb.setDoc(fb.doc(db, "households", hid, "barcodes", code), prod).catch(() => {});
+}
+
+/* ---------- розпізнавання фото через Gemini (Firebase AI Logic, безкоштовний рівень) ---------- */
+// Моделі по черзі: якщо одна недоступна/перевантажена — пробуємо наступну.
+export const AI_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+let aiMod = null, aiInst = null;
+async function getAI(){
+  if (!aiMod) aiMod = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-ai.js`);
+  if (!aiInst) aiInst = aiMod.getAI(app, { backend: new aiMod.GoogleAIBackend() });
+  return { m: aiMod, ai: aiInst };
+}
+// Зменшити фото до ~1600 px і JPEG — менше трафіку й квоти, якість для тексту достатня.
+async function toJpegB64(file, max = 1600){
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image(); img.src = url; await img.decode();
+    const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.88).split(",")[1];
+  } finally { URL.revokeObjectURL(url); }
+}
+// prompt — інструкція; files — фото. Повертає розібраний JSON.
+export async function aiJson(prompt, files){
+  const { m, ai } = await getAI();
+  const images = await Promise.all([...files].slice(0, 4).map(toJpegB64));
+  const parts = [prompt, ...images.map(data => ({ inlineData: { data, mimeType: "image/jpeg" } }))];
+  let lastErr;
+  for (const name of AI_MODELS) {
+    try {
+      const model = m.getGenerativeModel(ai, { model: name, generationConfig: { responseMimeType: "application/json", temperature: 0.1 } });
+      const res = await model.generateContent(parts);
+      const text = res.response.text();
+      return JSON.parse(text.replace(/^```(?:json)?|```$/g, "").trim());
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e && (e.message || e.code) || "");
+      // квота / ключ / App Check — інша модель не допоможе
+      if (/app-check|appcheck|API key|permission|PERMISSION_DENIED|unauth/i.test(msg)) break;
+    }
+  }
+  throw lastErr || new Error("ai");
 }

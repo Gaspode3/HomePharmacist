@@ -461,8 +461,57 @@ function applyGuess(g, overwrite){
   if (d.home) { set("strength", d.home.strength); set("form", d.home.form); set("location", d.home.location); }
   updateDup();
 }
+const AI_PROMPT = `Ти — асистент фармацевта. На фото — упаковка, блістер, флакон або інструкція лікарського засобу (здебільшого український ринок). Уважно прочитай усе, що видно, і витягни дані.
+Відповідай ЛИШЕ JSON-об'єктом:
+{"name":"торгова назва як на упаковці, без дозування","inn":["діючі речовини (МНН) українською в називному відмінку, напр. парацетамол"],"inn_latin":["ті самі латиницею, напр. paracetamol"],"strength":"дозування, напр. 200 мг або 500 мг/50 мг/15 мг","form":"форма коротко: таблетки, капсули, сироп, краплі, мазь…","qty":"кількість одиниць, якщо видно, напр. 10 таб., або null","expiry_dates":["усі різні терміни придатності на фото у форматі РРРР-ММ або РРРР-ММ-ДД"],"category":"коротко для чого: знеболювальне, протизапальне, антибіотик…","barcode":"цифри під штрих-кодом або null","confidence":"high|medium|low","unreadable":"що не вдалося прочитати, коротко, або null"}
+Дати: шукай EXP, «Придатний до», «до», «Термін придатності»; на блістерах дата часто вибита рельєфом без підпису (напр. 01/2029 = "2029-01"). Не плутай з датою виробництва (MFG, «Дата виготовлення», «Вироблено»), номером серії чи ліцензії. Якщо на фото кілька блістерів з різними датами — перелічи всі.
+Якщо назву видно, а діючу речовину ні — вкажи МНН лише якщо точно знаєш цей препарат. Нічого не вигадуй: чого не видно — null або [].`;
+
+async function aiRecognize(file){
+  setStatus(`<span class="spin"></span>Розпізнаю через ШІ… зазвичай 5–15 секунд.`);
+  // DataMatrix на фото — точна дата й код, швидко і без ШІ
+  let dm = null;
+  try { const r = await fileToImage(file); if (r) { const raw = await decodeImage(r.img); URL.revokeObjectURL(r.url); if (raw) dm = parseGS1(raw); } } catch {}
+  let j;
+  try { j = await store.aiJson(AI_PROMPT, [file]); }
+  catch (e) {
+    console.warn("AI", e);
+    const msg = String(e && (e.message || e.code) || "");
+    state.aiNote = /quota|429|RESOURCE_EXHAUSTED|rate/i.test(msg) ? "Ліміт безкоштовного ШІ на зараз вичерпано — спробую простим розпізнаванням." : "ШІ зараз недоступний — спробую простим розпізнаванням.";
+    return false;
+  }
+  if (!j || typeof j !== "object") return false;
+  const found = [];
+  const set = (id, v) => { if (v && !F(id).value.trim()) { F(id).value = Array.isArray(v) ? v.join(", ") : v; return true; } return false; };
+  if (set("name", j.name)) found.push(`<b>${esc(j.name)}</b>`);
+  const inn = toList(j.inn);
+  if (inn.length && set("inn", inn)) { state.formLatin = toList(j.inn_latin); }
+  if (!inn.length && j.name) onNameChange();
+  if (set("strength", j.strength)) found.push(`дозування <b>${esc(j.strength)}</b>`);
+  if (set("form", j.form)) found.push(esc(j.form));
+  set("category", j.category);
+  const code = dm && dm.gtin || (j.barcode ? String(j.barcode).replace(/\D/g, "") : "");
+  if (code && code.length >= 8) set("barcode", code);
+  const dates = [...new Set([...(dm && dm.expiry ? [dm.expiry] : []), ...(Array.isArray(j.expiry_dates) ? j.expiry_dates : []).map(parseExpiry).filter(Boolean)])];
+  for (const d of dates) { const p = putExpiry(d); found.push(`термін <b>${esc(fmtExpiry(d))}</b>${p.added ? ` (партія ${p.i + 1})` : ""}`); }
+  if (j.qty) { const l = state.lots.find(l => !l.qty); if (l && state.lots.length === 1) { l.qty = j.qty; renderLots(); } }
+  updateDup();
+  const notes = [];
+  if (!dates.length) notes.push("дату не знайдено — оберіть місяць і рік нижче");
+  if (j.confidence === "low") notes.push("впевненість низька — перевірте поля");
+  if (j.unreadable) notes.push("не прочитано: " + esc(j.unreadable));
+  setStatus((found.length ? `Розпізнано: ${found.join(", ")}. Перевірте поля й збережіть.` : "Майже нічого не вдалося прочитати.") + (notes.length ? "<br>" + notes.join("; ") : ""), !found.length);
+  if (!F("name").value.trim()) F("name").focus();
+  return true;
+}
+
 async function photoRecognize(file){
-  setStatus(`<span class="spin"></span>Розпізнаю… (перший раз довше — завантажується розпізнавання)`);
+  state.aiNote = "";
+  if (await aiRecognize(file)) return;
+  return ocrRecognize(file);
+}
+async function ocrRecognize(file){
+  setStatus(`<span class="spin"></span>${state.aiNote ? esc(state.aiNote) + "<br>" : ""}Розпізнаю… (перший раз довше — завантажується розпізнавання)`);
   let r;
   try {
     r = await ocrPhoto(file, (p, label) => setStatus(`<span class="spin"></span>${esc(label || "Читаю…")} ${p ? p + "%" : ""}`),
