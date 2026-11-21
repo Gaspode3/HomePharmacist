@@ -64,6 +64,7 @@ function badgeText(st){
 /* ============ старт ============ */
 async function boot(){
   bindUI();
+  initExpSelects();
   $("#brands").innerHTML = BRAND_LIST.map(b => `<option>${esc(b)}</option>`).join("");
   if (!store.configured()) { show("s-setup"); return; }
   try { await store.init(); }
@@ -271,7 +272,28 @@ function editMed(id){
   $("#addTitle").textContent = "Редагувати"; $("#btnSave").textContent = "Зберегти зміни";
   closeSheet(); switchTab("add");
 }
+const MONTHS = ["01 · січень", "02 · лютий", "03 · березень", "04 · квітень", "05 · травень", "06 · червень", "07 · липень", "08 · серпень", "09 · вересень", "10 · жовтень", "11 · листопад", "12 · грудень"];
+function initExpSelects(){
+  const y0 = new Date().getFullYear();
+  $("#f-exp-m").innerHTML = `<option value="">місяць</option>` + MONTHS.map((m, i) => `<option value="${String(i + 1).padStart(2, "0")}">${m}</option>`).join("");
+  let ys = `<option value="">рік</option>`;
+  for (let y = y0 - 3; y <= y0 + 8; y++) ys += `<option value="${y}">${y}</option>`;
+  $("#f-exp-y").innerHTML = ys;
+  const fromSelects = () => {
+    const m = $("#f-exp-m").value, y = $("#f-exp-y").value;
+    if (m && y) { F("expiry").value = `${m}.${y}`; updateExpHint(); }
+  };
+  $("#f-exp-m").onchange = () => { fromSelects(); if (!$("#f-exp-y").value) $("#f-exp-y").focus(); };
+  $("#f-exp-y").onchange = fromSelects;
+}
+function syncExpSelects(){
+  const e = parseExpiry(F("expiry").value.trim());
+  const [y, m] = e ? e.split("-") : ["", ""];
+  if (y && ![...$("#f-exp-y").options].some(o => o.value === y)) $("#f-exp-y").insertAdjacentHTML("beforeend", `<option value="${y}">${y}</option>`);
+  $("#f-exp-m").value = m || ""; $("#f-exp-y").value = y || "";
+}
 function updateExpHint(){
+  syncExpSelects();
   const v = F("expiry").value.trim(), h = $("#expHint");
   if (!v) { h.textContent = "ММ.РРРР або ДД.ММ.РРРР"; h.style.color = ""; return; }
   const e = parseExpiry(v);
@@ -350,12 +372,19 @@ async function codeFromPhoto(file){
   else setStatus("Код не знайдено. Сфотографуйте ближче, рівно і при доброму світлі.", true);
 }
 async function dateFromPhoto(file){
-  setStatus(`<span class="spin"></span>Читаю дату… (перший раз довше — завантажується розпізнавання)`);
+  setStatus(`<span class="spin"></span>Шукаю дату… (перший раз довше — завантажується розпізнавання)`);
   try {
-    const r = await ocrExpiry(file, p => setStatus(`<span class="spin"></span>Читаю дату… ${p}%`));
-    if (r.expiry) { F("expiry").value = fmtExpiry(r.expiry); updateExpHint(); setStatus(`Знайдено дату: <b>${esc(fmtExpiry(r.expiry))}</b> — перевірте, що це саме термін придатності.`); }
-    else setStatus("Дату не розпізнано. Сфотографуйте ближче лише місце з датою або впишіть вручну.", true);
-  } catch { setStatus("Не вдалося завантажити розпізнавання — перевірте інтернет або впишіть дату вручну.", true); }
+    const r = await ocrExpiry(file, (p, label) => setStatus(`<span class="spin"></span>${esc(label || "Читаю дату…")} ${p ? p + "%" : ""}`));
+    if (r.expiry) {
+      F("expiry").value = fmtExpiry(r.expiry); updateExpHint();
+      if (r.source === "datamatrix") { await applyCode(r.text); return; }
+      setStatus(`Знайдено дату: <b>${esc(fmtExpiry(r.expiry))}</b> — перевірте, що це саме термін придатності.`);
+    } else {
+      setStatus(`Дату не розпізнано. Рельєфні (вибиті) дати на фользі блістера телефон прочитати не може — оберіть <b>місяць і рік</b> у полі «Придатний до». Друковану дату на коробці сфотографуйте ближче й рівно.
+        <details class="ocrraw"><summary>Що вдалося прочитати</summary><pre>${esc((r.text || "").trim().slice(0, 1500) || "—")}</pre></details>`, true);
+      $("#f-exp-m").focus();
+    }
+  } catch { setStatus("Не вдалося завантажити розпізнавання — перевірте інтернет або оберіть дату вручну.", true); }
 }
 
 /* ============ призначення лікаря (без ШІ) ============ */

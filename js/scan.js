@@ -132,35 +132,106 @@ export async function decodeImage(img){
 }
 
 /* ---------- дата придатності з фото (OCR) ---------- */
+// OCR часто плутає 0↔O, 1↔I/l, 5↔S, 8↔B поруч із цифрами — виправляємо лише в «цифрових» місцях.
+export function cleanOcr(text){
+  let t = String(text || "").toUpperCase();
+  const fix = { "O": "0", "О": "0", "D": "0", "Q": "0", "U": "0", "I": "1", "L": "1", "|": "1", "!": "1", "S": "5", "B": "8", "З": "3", "Z": "2" };
+  const near = /[0-9][OОDQUIL|!SBЗZ]|[OОDQUIL|!SBЗZ][0-9]/;
+  for (let i = 0; i < 3 && near.test(t); i++)
+    t = t.replace(/([0-9])([OОDQUIL|!SBЗZ])/g, (m, a, b) => a + fix[b]).replace(/([OОDQUIL|!SBЗZ])([0-9])/g, (m, a, b) => fix[a] + b);
+  // «03 . 2027», «03 /27» → «03.2027», «03/27»
+  t = t.replace(/(\d)\s*([.\/\-,])\s*(\d)/g, "$1$2$3").replace(/(\d),(\d)/g, "$1.$2");
+  return t.replace(/\s+/g, " ");
+}
 // Шукає дати у тексті й обирає найімовірніший термін придатності.
 export function pickExpiry(text){
-  const t = String(text || "").toUpperCase().replace(/[OО]/g, m => m).replace(/\s+/g, " ");
+  const t = cleanOcr(text);
   const found = [];
   const push = (y, mo, d, idx) => {
     y = +y; mo = +mo; d = d ? +d : null;
     if (y < 100) y += 2000;
     if (mo < 1 || mo > 12 || y < 2015 || y > 2045 || (d !== null && (d < 1 || d > 31))) return;
-    const before = t.slice(Math.max(0, idx - 18), idx);
+    const before = t.slice(Math.max(0, idx - 22), idx);
     let score = 0;
-    if (/EXP|ПРИДАТН|ДО\b|ДО:|ГОДЕН|BEST|USE BY|ТЕРМ/.test(before)) score += 5;
-    if (/MFG|MFD|ВИГОТ|ВИРОБ|ДАТА ВИР|PROD/.test(before)) score -= 6;
+    if (/EXP|ЕХР|ЕХP|ПРИДАТ|ПРИД|ДО\b|ДО:|ДО\.|ГОДЕН|BEST|USE BY|ТЕРМ|ВЕ5Т/.test(before)) score += 5;
+    if (/MFG|MFD|MAN|ВИГОТ|ВИРОБ|ВИГ\.|ДАТА В|PROD|ИЗГ/.test(before)) score -= 6;
     found.push({ v: d ? `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}` : `${y}-${String(mo).padStart(2, "0")}`, y, mo, score });
   };
   let m;
-  const r1 = /(\d{1,2})[.\/\-](\d{1,2})[.\/\-](\d{2,4})/g;            // ДД.ММ.РРРР
+  const r1 = /(?<!\d)(\d{1,2})[.\/\-](\d{1,2})[.\/\-](\d{4}|\d{2})(?!\d)/g;     // ДД.ММ.РРРР
   while ((m = r1.exec(t))) push(m[3], m[2], m[1], m.index);
-  const r2 = /(?<![\d.\/\-])(\d{1,2})[.\/\- ](20\d{2}|\d{2})(?![\d.\/\-])/g; // ММ.РРРР, ММ/РР
+  const r2 = /(?<![\d.\/\-])(\d{1,2})[.\/\- ](20\d{2}|\d{2})(?![\d.\/\-])/g;     // ММ.РРРР, ММ/РР
   while ((m = r2.exec(t))) push(m[2], m[1], null, m.index);
-  const r3 = /(20\d{2})[.\/\-](\d{1,2})(?![\d])/g;                     // РРРР-ММ
+  const r3 = /(?<!\d)(20\d{2})[.\/\-](\d{1,2})(?![\d])/g;                       // РРРР-ММ
   while ((m = r3.exec(t))) push(m[1], m[2], null, m.index);
+  const r4 = /(?:EXP|ЕХР|ДО)[^0-9]{0,4}(\d{2})(\d{2})(\d{2})?(?!\d)/g;          // EXP 0327 / EXP 270331
+  while ((m = r4.exec(t))) { if (m[3]) push(m[1], m[2], m[3], m.index + 3); else push(m[2], m[1], null, m.index + 3); }
   if (!found.length) return null;
   // найвищий бал; при рівності — пізніша дата (термін придатності пізніше за дату виробництва)
   found.sort((a, b) => b.score - a.score || (b.y * 12 + b.mo) - (a.y * 12 + a.mo));
   return found[0].v;
 }
+
+// Підготовка фото: зменшити/збільшити до зручного розміру, сірий, розтягнути контраст, повернути.
+function prepCanvas(img, rot){
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const k = Math.min(2.5, 2000 / Math.max(W, H));
+  const w = Math.round(W * k), h = Math.round(H * k);
+  const c = document.createElement("canvas");
+  const swap = rot === 90 || rot === 270;
+  c.width = swap ? h : w; c.height = swap ? w : h;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  ctx.translate(c.width / 2, c.height / 2); ctx.rotate(rot * Math.PI / 180);
+  ctx.drawImage(img, -w / 2, -h / 2, w, h);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const d = ctx.getImageData(0, 0, c.width, c.height), px = d.data;
+  const hist = new Uint32Array(256), n = px.length / 4;
+  for (let i = 0; i < px.length; i += 4) { const g = (px[i] * 77 + px[i + 1] * 150 + px[i + 2] * 29) >> 8; px[i] = g; hist[g]++; }
+  let lo = 0, hi = 255, acc = 0;
+  for (; lo < 255 && (acc += hist[lo]) < n * 0.02; lo++);
+  acc = 0; for (; hi > 0 && (acc += hist[hi]) < n * 0.02; hi--);
+  const span = Math.max(1, hi - lo);
+  for (let i = 0; i < px.length; i += 4) { const v = Math.max(0, Math.min(255, (px[i] - lo) * 255 / span)); px[i] = px[i + 1] = px[i + 2] = v; }
+  ctx.putImageData(d, 0, 0);
+  return c;
+}
+
+let worker = null, workerP = null, progressCb = null;
+async function getWorker(){
+  if (worker) return worker;
+  if (!workerP) workerP = (async () => {
+    await loadScript(TESS);
+    const w = await window.Tesseract.createWorker("ukr+eng", 1, {
+      logger: m => { if (progressCb && m.status === "recognizing text") progressCb(m.progress); }
+    });
+    worker = w; return w;
+  })().catch(e => { workerP = null; throw e; });
+  return workerP;
+}
+
+// Повертає { expiry, text, source: "datamatrix" | "ocr" }.
 export async function ocrExpiry(file, onProgress){
-  await loadScript(TESS);
-  const r = await window.Tesseract.recognize(file, "eng", { logger: m => { if (m.status === "recognizing text" && onProgress) onProgress(Math.round(m.progress * 100)); } });
-  const text = r && r.data ? r.data.text : "";
-  return { expiry: pickExpiry(text), text };
+  const r = await fileToImage(file);
+  if (!r) throw new Error("image");
+  try {
+    // 1) на фото може бути DataMatrix — тоді дата точна
+    const raw = await decodeImage(r.img);
+    if (raw) { const g = parseGS1(raw); if (g.expiry) return { expiry: g.expiry, text: raw, source: "datamatrix", code: g.gtin || raw }; }
+    // 2) OCR кількома проходами: розріджений текст, блок тексту, повернуте фото
+    onProgress && onProgress(0, "Завантажую розпізнавання…");
+    const w = await getWorker();
+    const passes = [[0, "11"], [0, "6"], [90, "11"], [270, "11"], [180, "11"]];
+    const texts = [];
+    for (let i = 0; i < passes.length; i++) {
+      const [rot, psm] = passes[i];
+      progressCb = p => onProgress && onProgress(Math.round(((i + p) / passes.length) * 100), "Читаю дату…");
+      await w.setParameters({ tessedit_pageseg_mode: psm });
+      const res = await w.recognize(prepCanvas(r.img, rot));
+      const text = res && res.data ? res.data.text : "";
+      texts.push(text);
+      const exp = pickExpiry(text);
+      if (exp) return { expiry: exp, text, source: "ocr" };
+    }
+    return { expiry: null, text: texts.join("\n---\n"), source: "ocr" };
+  } finally { progressCb = null; URL.revokeObjectURL(r.url); }
 }

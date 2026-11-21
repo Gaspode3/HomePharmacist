@@ -135,3 +135,7 @@
   .scanner .bar p{margin:0 0 10px;font-size:14px;color:#ddd}
   .who{font-size:12px;color:var(--muted)}
   .offline{background:#eef1f0;color:var(--muted)}
+
+  .exprow{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .exprow select{width:100%;border:1px solid var(--line);border-radius:12px;padding:11px 8px;background:#fbfcfc;font-weight:700}
+  details.ocrraw{margin-top:8px;font-size:12px;color:var(--muted)} details.ocrraw pre{white-space:pre-wrap;word-break:break-word;max-height:140px;overflow:auto}
