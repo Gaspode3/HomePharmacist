@@ -114,7 +114,8 @@ export function setCode(hid, code, prod){
 
 /* ---------- розпізнавання фото через Gemini (Firebase AI Logic, безкоштовний рівень) ---------- */
 // Моделі по черзі: якщо одна недоступна/перевантажена — пробуємо наступну.
-export const AI_MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-3.5-flash-lite"];
+// lite — швидка й стабільна на безкоштовному рівні; повна flash часто перевантажена, тому остання.
+export const AI_MODELS = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-flash-latest"];
 let aiMod = null, aiInst = null;
 let appCheckOn = false;
 // App Check вмикаємо лише перед першим запитом до ШІ — щоб проблеми з reCAPTCHA не заважали відкривати сайт.
@@ -151,7 +152,8 @@ export async function aiJson(prompt, files){
   for (const name of AI_MODELS) {
     try {
       const model = m.getGenerativeModel(ai, { model: name, generationConfig: { responseMimeType: "application/json", temperature: 0.1 } });
-      const res = await model.generateContent(parts);
+      const res = await Promise.race([model.generateContent(parts),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("timeout " + name)), 25000))]);
       const text = res.response.text();
       return JSON.parse(text.replace(/^```(?:json)?|```$/g, "").trim());
     } catch (e) {
