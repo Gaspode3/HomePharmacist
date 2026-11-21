@@ -46,6 +46,32 @@ function statusOf(med){
   const days = Math.round((d - t) / 864e5);
   return { k: days < 0 ? "expired" : days <= 30 ? "soon" : days <= 90 ? "warn" : "ok", days };
 }
+// Партії (блістери/упаковки) з різними термінами. med.expiry = найближчий термін.
+function lotsOf(m){
+  const l = Array.isArray(m.lots) ? m.lots.filter(x => x && (x.expiry || x.qty)) : [];
+  if (l.length) return l.map(x => ({ expiry: x.expiry || "", qty: x.qty || "" }));
+  return m.expiry || m.qty ? [{ expiry: m.expiry || "", qty: m.qty || "" }] : [];
+}
+const expKey = e => e ? e.length === 7 ? e + "-99" : e : "9999";
+function normalizeLots(lots){
+  const l = lots.filter(x => x.expiry || String(x.qty || "").trim()).map(x => ({ expiry: x.expiry || "", qty: String(x.qty || "").trim() }));
+  l.sort((a, b) => expKey(a.expiry).localeCompare(expKey(b.expiry)));
+  const first = l.find(x => x.expiry);
+  return { lots: l, expiry: first ? first.expiry : "", qty: l.length === 1 ? l[0].qty : l.map(x => x.qty).filter(Boolean).join(" + ") };
+}
+// найкращий (найпізніший) статус — чи є хоч один непрострочений блістер
+function bestStatus(m){
+  const ls = lotsOf(m); if (!ls.length) return statusOf(m);
+  const st = ls.map(l => statusOf({ expiry: l.expiry }));
+  const known = st.filter(s => s.k !== "unknown");
+  if (!known.length) return st[0];
+  return known.sort((a, b) => b.days - a.days)[0];
+}
+function lotsText(m){
+  const ls = lotsOf(m);
+  if (ls.length <= 1) return [m.expiry ? "до " + fmtExpiry(m.expiry) : "", m.qty].filter(Boolean).join(" · ");
+  return ls.length + " партії: " + ls.map(l => (l.expiry ? fmtExpiry(l.expiry) : "без дати") + (l.qty ? " (" + l.qty + ")" : "")).join(", ");
+}
 function spanText(days){
   const a = Math.abs(days);
   if (a < 31) return `${a} дн.`;
@@ -53,6 +79,15 @@ function spanText(days){
   if (m < 12) return `${m} міс.`;
   const y = Math.floor(m / 12), r = m % 12;
   return r ? `${y} р. ${r} міс.` : `${y} р.`;
+}
+// Текст плашки для ліків: якщо частина партій прострочена — так і пишемо.
+function medBadge(m){
+  const st = statusOf(m), ls = lotsOf(m);
+  if (ls.length > 1 && st.k === "expired") {
+    const exp = ls.filter(l => statusOf({ expiry: l.expiry }).k === "expired").length;
+    if (exp < ls.length) return { k: "expired", text: `${exp} з ${ls.length} партій прострочено` };
+  }
+  return { k: st.k, text: badgeText(st) };
 }
 function badgeText(st){
   if (st.k === "unknown") return "термін не вказано";
@@ -64,7 +99,7 @@ function badgeText(st){
 /* ============ старт ============ */
 async function boot(){
   bindUI();
-  initExpSelects();
+  state.lots = [{ expiry: "", qty: "" }]; renderLots();
   $("#brands").innerHTML = BRAND_LIST.map(b => `<option>${esc(b)}</option>`).join("");
   if (!store.configured()) { show("s-setup"); return; }
   try { await store.init(); }
@@ -161,9 +196,9 @@ function render(){
   list.innerHTML = rows.map(({ m, st }) => `
     <button class="card s-${st.k}" data-id="${esc(m.id)}">
       <div class="ctop"><div class="cname">${esc(m.name)} ${m.strength ? `<small>${esc(m.strength)}</small>` : ""}</div>
-        <span class="badge b-${st.k}">${esc(badgeText(st))}</span></div>
+        <span class="badge b-${st.k}">${esc(medBadge(m).text)}</span></div>
       <div class="cinn">${esc([(m.inn || []).join(" + "), m.form].filter(Boolean).join(" · ") || "діюча речовина не вказана")}</div>
-      <div class="cmeta">${esc([m.expiry ? "до " + fmtExpiry(m.expiry) : "", m.qty, m.category, m.location].filter(Boolean).join(" · "))}</div>
+      <div class="cmeta">${esc([lotsText(m), m.category, m.location].filter(Boolean).join(" · "))}</div>
     </button>`).join("");
 }
 
@@ -177,12 +212,11 @@ function showMed(id){
   const same = sameInn(m).filter(x => x.id !== m.id);
   openSheet(`
     <h3>${esc(m.name)} ${m.strength ? `<small style="color:var(--muted)">${esc(m.strength)}</small>` : ""}</h3>
-    <span class="badge b-${st.k}">${esc(badgeText(st))}</span>
+    <span class="badge b-${st.k}">${esc(medBadge(m).text)}</span>
+    ${lotsView(m)}
     <dl class="kv">
       <dt>Діюча речовина</dt><dd>${esc((m.inn || []).join(" + ") || "—")}${m.innLatin && m.innLatin.length ? ` <span style="color:var(--muted)">(${esc(m.innLatin.join(" + "))})</span>` : ""}</dd>
       <dt>Форма</dt><dd>${esc(m.form || "—")}</dd>
-      <dt>Придатний до</dt><dd>${esc(fmtExpiry(m.expiry))}</dd>
-      <dt>Кількість</dt><dd>${esc(m.qty || "—")}</dd>
       <dt>Для чого</dt><dd>${esc(m.category || "—")}</dd>
       <dt>Де лежить</dt><dd>${esc(m.location || "—")}</dd>
       ${m.notes ? `<dt>Нотатки</dt><dd>${esc(m.notes)}</dd>` : ""}
@@ -190,10 +224,26 @@ function showMed(id){
       ${same.length ? `<dt>Аналоги вдома</dt><dd>${same.map(x => esc(x.name + (x.strength ? " " + x.strength : "") + " (до " + fmtExpiry(x.expiry) + ")")).join("<br>")}</dd>` : ""}
       ${m.addedBy ? `<dt>Додав(ла)</dt><dd>${esc(shortEmail(m.addedBy))}${m.addedAt ? ", " + esc(new Date(m.addedAt).toLocaleDateString("uk-UA")) : ""}</dd>` : ""}
     </dl>
-    ${st.k === "expired" ? `<div class="warnbox" style="margin:0 0 14px">Протерміновані ліки не варто приймати. Утилізуйте їх окремо від побутового сміття — деякі аптеки приймають прострочені препарати.</div>` : ""}
+    ${st.k === "expired" ? `<div class="warnbox" style="margin:0 0 14px">${lotsOf(m).length > 1 ? "Прострочену партію натисніть «Викинув», щоб прибрати її зі списку. " : ""}Протерміновані ліки не варто приймати. Утилізуйте їх окремо від побутового сміття — деякі аптеки приймають прострочені препарати.</div>` : ""}
     <div class="btnrow"><button class="btn ghost" data-act="del" data-id="${esc(m.id)}">Видалити</button>
       <button class="btn" data-act="edit" data-id="${esc(m.id)}">Редагувати</button></div>
     <button class="btn ghost" style="margin-top:10px" data-act="close">Закрити</button>`);
+}
+function lotsView(m){
+  const ls = lotsOf(m);
+  if (!ls.length) return `<p class="muted">Термін не вказано</p>`;
+  return `<div class="lots-view">${ls.map((l, i) => { const s = statusOf({ expiry: l.expiry });
+    return `<div class="lotline"><span class="t"><b>${l.expiry ? "до " + esc(fmtExpiry(l.expiry)) : "без дати"}</b>${l.qty ? " · " + esc(l.qty) : ""}</span>
+      <span class="badge b-${s.k}">${esc(badgeText(s))}</span>
+      <button data-act="rm-lot" data-id="${esc(m.id)}" data-i="${i}" aria-label="Прибрати">${s.k === "expired" ? "Викинув" : "Закінчився"}</button></div>`; }).join("")}</div>`;
+}
+async function removeLot(id, i){
+  const m = state.meds.find(x => x.id === id); if (!m) return;
+  const ls = lotsOf(m);
+  if (ls.length <= 1) { confirmDelete(id); return; }
+  ls.splice(i, 1);
+  const n = normalizeLots(ls);
+  if (await saveMed({ ...m, lots: n.lots, expiry: n.expiry, qty: n.qty })) { toast("Партію прибрано"); showMed(id); }
 }
 function confirmDelete(id){
   const m = state.meds.find(x => x.id === id); if (!m) return;
@@ -242,6 +292,10 @@ async function doImport(){
     const m = { name: String(raw.name), inn: toList(raw.inn), innLatin: toList(raw.innLatin), strength: String(raw.strength || ""), form: String(raw.form || ""),
       expiry: parseExpiry(raw.expiry) || "", qty: String(raw.qty || ""), category: String(raw.category || ""), location: String(raw.location || ""),
       notes: String(raw.notes || ""), barcode: String(raw.barcode || "") };
+    if (Array.isArray(raw.lots) && raw.lots.length) {
+      const n = normalizeLots(raw.lots.map(l => ({ expiry: parseExpiry(l && l.expiry) || "", qty: String(l && l.qty || "") })));
+      Object.assign(m, n);
+    }
     const key = [m.name, m.strength, m.expiry].join("|");
     if (have.has(key)) continue;
     have.add(key);
@@ -255,15 +309,16 @@ const F = id => $("#f-" + id);
 function fillForm(m, onlyEmpty){
   const set = (id, v) => { if (v == null || v === "" || (Array.isArray(v) && !v.length)) return; if (onlyEmpty && F(id).value.trim()) return; F(id).value = Array.isArray(v) ? v.join(", ") : v; };
   set("name", m.name); set("inn", m.inn); set("strength", m.strength); set("form", m.form);
-  set("qty", m.qty); set("category", m.category); set("location", m.location); set("notes", m.notes); set("barcode", m.barcode);
-  if (m.expiry) set("expiry", fmtExpiry(m.expiry));
+  set("category", m.category); set("location", m.location); set("notes", m.notes); set("barcode", m.barcode);
+  if (!onlyEmpty) { const ls = lotsOf(m); state.lots = ls.length ? ls : [{ expiry: "", qty: "" }]; renderLots(); }
   if (m.innLatin && m.innLatin.length) state.formLatin = m.innLatin;
-  updateDup(); updateExpHint();
+  updateDup();
 }
 function clearForm(){
   $("#medForm").reset(); state.editingId = null; state.formLatin = null; state.formExtra = null;
   setStatus(""); $("#addTitle").textContent = "Додати ліки"; $("#btnSave").textContent = "Зберегти";
-  updateDup(); updateExpHint();
+  state.lots = [{ expiry: "", qty: "" }]; renderLots();
+  updateDup();
 }
 function editMed(id){
   const m = state.meds.find(x => x.id === id); if (!m) return;
@@ -272,33 +327,42 @@ function editMed(id){
   $("#addTitle").textContent = "Редагувати"; $("#btnSave").textContent = "Зберегти зміни";
   closeSheet(); switchTab("add");
 }
-const MONTHS = ["01 · січень", "02 · лютий", "03 · березень", "04 · квітень", "05 · травень", "06 · червень", "07 · липень", "08 · серпень", "09 · вересень", "10 · жовтень", "11 · листопад", "12 · грудень"];
-function initExpSelects(){
+const MONTHS = ["01 · січ", "02 · лют", "03 · бер", "04 · кві", "05 · тра", "06 · чер", "07 · лип", "08 · сер", "09 · вер", "10 · жов", "11 · лис", "12 · гру"];
+function renderLots(){
   const y0 = new Date().getFullYear();
-  $("#f-exp-m").innerHTML = `<option value="">місяць</option>` + MONTHS.map((m, i) => `<option value="${String(i + 1).padStart(2, "0")}">${m}</option>`).join("");
-  let ys = `<option value="">рік</option>`;
-  for (let y = y0 - 3; y <= y0 + 8; y++) ys += `<option value="${y}">${y}</option>`;
-  $("#f-exp-y").innerHTML = ys;
-  const fromSelects = () => {
-    const m = $("#f-exp-m").value, y = $("#f-exp-y").value;
-    if (m && y) { F("expiry").value = `${m}.${y}`; updateExpHint(); }
-  };
-  $("#f-exp-m").onchange = () => { fromSelects(); if (!$("#f-exp-y").value) $("#f-exp-y").focus(); };
-  $("#f-exp-y").onchange = fromSelects;
+  $("#lots").innerHTML = state.lots.map((l, i) => {
+    const [y, mo, d] = (l.expiry || "").split("-");
+    const years = []; for (let k = y0 - 3; k <= y0 + 8; k++) years.push(String(k));
+    if (y && !years.includes(y)) years.push(y);
+    const st = statusOf({ expiry: l.expiry });
+    const hint = l.expiry ? (d ? "до " + fmtExpiry(l.expiry) + " · " : "") + badgeText(st) : "оберіть місяць і рік";
+    return `<div class="lot ${st.k === "expired" ? "s-expired" : ""}" data-i="${i}">
+      ${state.lots.length > 1 ? `<div class="lothead">Партія ${i + 1}<button type="button" data-del="${i}">Прибрати</button></div>` : ""}
+      <div class="lotgrid">
+        <select class="lm" aria-label="Місяць"><option value="">місяць</option>${MONTHS.map((m, k) => { const v = String(k + 1).padStart(2, "0"); return `<option value="${v}" ${v === mo ? "selected" : ""}>${m}</option>`; }).join("")}</select>
+        <select class="ly" aria-label="Рік"><option value="">рік</option>${years.map(v => `<option ${v === y ? "selected" : ""}>${v}</option>`).join("")}</select>
+        <input class="lq" placeholder="к-сть" value="${esc(l.qty)}" aria-label="Кількість">
+      </div>
+      <div class="hint" style="${st.k === "expired" ? "color:var(--red)" : ""}">${esc(hint)}</div></div>`;
+  }).join("");
 }
-function syncExpSelects(){
-  const e = parseExpiry(F("expiry").value.trim());
-  const [y, m] = e ? e.split("-") : ["", ""];
-  if (y && ![...$("#f-exp-y").options].some(o => o.value === y)) $("#f-exp-y").insertAdjacentHTML("beforeend", `<option value="${y}">${y}</option>`);
-  $("#f-exp-m").value = m || ""; $("#f-exp-y").value = y || "";
+function onLotsChange(e){
+  const box = e.target.closest(".lot"); if (!box) return;
+  const i = +box.dataset.i, l = state.lots[i];
+  if (e.target.classList.contains("lq")) { l.qty = e.target.value; return; }
+  const mo = box.querySelector(".lm").value, y = box.querySelector(".ly").value;
+  if (mo && y) { l.expiry = `${y}-${mo}`; renderLots(); }
+  else if (!mo && !y) { l.expiry = ""; renderLots(); }
+  else if (e.target.classList.contains("lm")) box.querySelector(".ly").focus();
 }
-function updateExpHint(){
-  syncExpSelects();
-  const v = F("expiry").value.trim(), h = $("#expHint");
-  if (!v) { h.textContent = "ММ.РРРР або ДД.ММ.РРРР"; h.style.color = ""; return; }
-  const e = parseExpiry(v);
-  if (!e) { h.textContent = "Не розумію дату — напр. 03.2027"; h.style.color = "var(--red)"; return; }
-  const st = statusOf({ expiry: e }); h.textContent = badgeText(st); h.style.color = st.k === "expired" ? "var(--red)" : "";
+// Поставити дату (з DataMatrix / фото) у першу порожню партію або додати нову.
+function putExpiry(exp){
+  if (state.lots.some(l => l.expiry === exp)) return { i: state.lots.findIndex(l => l.expiry === exp), added: false };
+  let i = state.lots.findIndex(l => !l.expiry);
+  let added = false;
+  if (i < 0) { state.lots.push({ expiry: "", qty: "" }); i = state.lots.length - 1; added = true; }
+  state.lots[i].expiry = exp; renderLots();
+  return { i, added };
 }
 const innKeys = m => [...(m.inn || []), ...(m.innLatin || [])].map(norm).filter(k => k.length > 3);
 function sameInn(m){
@@ -320,14 +384,15 @@ async function onSubmit(ev){
   ev.preventDefault();
   const name = F("name").value.trim();
   if (!name) { F("name").focus(); return; }
-  const expRaw = F("expiry").value.trim(), expiry = parseExpiry(expRaw);
-  if (expRaw && !expiry) { toast("Перевірте дату придатності"); F("expiry").focus(); return; }
+  const half = [...document.querySelectorAll("#lots .lot")].find(b => !!b.querySelector(".lm").value !== !!b.querySelector(".ly").value);
+  if (half) { toast("Оберіть і місяць, і рік"); half.querySelector(half.querySelector(".lm").value ? ".ly" : ".lm").focus(); return; }
+  const n = normalizeLots(state.lots);
   const inn = toList(F("inn").value);
   let innLatin = state.formLatin || [];
   if (!innLatin.length && inn.length) { const d = findDrug(inn.join(" ")); if (d) innLatin = d.l; }
   const med = { ...(state.formExtra || {}), id: state.editingId || undefined, name, inn, innLatin,
-    strength: F("strength").value.trim(), form: F("form").value.trim(), expiry: expiry || "",
-    qty: F("qty").value.trim(), category: F("category").value.trim(), location: F("location").value.trim(),
+    strength: F("strength").value.trim(), form: F("form").value.trim(), lots: n.lots, expiry: n.expiry,
+    qty: n.qty, category: F("category").value.trim(), location: F("location").value.trim(),
     notes: F("notes").value.trim(), barcode: F("barcode").value.trim() };
   $("#btnSave").disabled = true;
   const ok = await saveMed(med);
@@ -352,16 +417,32 @@ async function openScanner(){
 function closeScanner(){ if (stopScan) { stopScan(); stopScan = null; } $("#scanner").hidden = true; }
 async function applyCode(raw){
   const g = parseGS1(raw), code = g.gtin || raw;
+  // Такі ліки вже є вдома (той самий код) — запропонувати додати як ще одну партію
+  const own = !state.editingId && state.meds.find(m => codeKey(m.barcode) === codeKey(code));
+  if (own) {
+    const has = g.expiry && lotsOf(own).some(l => l.expiry === g.expiry);
+    setStatus(`<b>${esc(own.name)}</b> уже є в аптечці (${esc(lotsText(own) || "без дати")}).` +
+      (g.expiry ? ` На цій упаковці термін <b>${esc(fmtExpiry(g.expiry))}</b>.` : "") +
+      (has ? " Така партія вже записана." : `<br><button type="button" class="capbtn" data-addlot="${esc(own.id)}" data-exp="${esc(g.expiry || "")}">Додати як ще одну партію</button>`));
+    return;
+  }
   F("barcode").value = code;
-  if (g.expiry) { F("expiry").value = fmtExpiry(g.expiry); updateExpHint(); }
+  let lotMsg = "";
+  if (g.expiry) { const r = putExpiry(g.expiry); lotMsg = r.added ? ` (додано як партію ${r.i + 1})` : ""; }
   const known = await lookupCode(code);
   const parts = [];
   if (known) { fillForm(known, true); parts.push(`Знайдено: <b>${esc(known.name)}</b>`); }
   else parts.push(`Код ${esc(code)} — новий, впишіть назву (наступного разу заповниться сам)`);
-  if (g.expiry) parts.push(`термін із DataMatrix: <b>${esc(fmtExpiry(g.expiry))}</b>`);
-  else if (!F("expiry").value) parts.push("термін додайте вручну або кнопкою «Дата з фото»");
+  if (g.expiry) parts.push(`термін із DataMatrix: <b>${esc(fmtExpiry(g.expiry))}</b>${lotMsg}`);
+  else if (!state.lots.some(l => l.expiry)) parts.push("оберіть місяць і рік придатності нижче");
   setStatus(parts.join(" · ") + ".");
   if (!known) F("name").focus();
+}
+function addLotTo(id, exp){
+  editMed(id);
+  if (exp) putExpiry(exp); else { state.lots.push({ expiry: "", qty: "" }); renderLots(); }
+  setStatus(`Додано нову партію${exp ? " з терміном <b>" + esc(fmtExpiry(exp)) + "</b>" : ""} — вкажіть кількість і збережіть.`);
+  const last = $("#lots").lastElementChild; if (last) last.scrollIntoView({ block: "center" });
 }
 async function codeFromPhoto(file){
   setStatus(`<span class="spin"></span>Шукаю код на фото…`);
@@ -376,13 +457,13 @@ async function dateFromPhoto(file){
   try {
     const r = await ocrExpiry(file, (p, label) => setStatus(`<span class="spin"></span>${esc(label || "Читаю дату…")} ${p ? p + "%" : ""}`));
     if (r.expiry) {
-      F("expiry").value = fmtExpiry(r.expiry); updateExpHint();
       if (r.source === "datamatrix") { await applyCode(r.text); return; }
-      setStatus(`Знайдено дату: <b>${esc(fmtExpiry(r.expiry))}</b> — перевірте, що це саме термін придатності.`);
+      const p = putExpiry(r.expiry);
+      setStatus(`Знайдено дату: <b>${esc(fmtExpiry(r.expiry))}</b>${p.added ? ` — додано як партію ${p.i + 1}` : ""}. Перевірте, що це саме термін придатності.`);
     } else {
-      setStatus(`Дату не розпізнано. Рельєфні (вибиті) дати на фользі блістера телефон прочитати не може — оберіть <b>місяць і рік</b> у полі «Придатний до». Друковану дату на коробці сфотографуйте ближче й рівно.
+      setStatus(`Дату не розпізнано. Рельєфні (вибиті) дати на фользі блістера телефон прочитати не може — оберіть <b>місяць і рік</b> нижче. Друковану дату на коробці сфотографуйте ближче й рівно.
         <details class="ocrraw"><summary>Що вдалося прочитати</summary><pre>${esc((r.text || "").trim().slice(0, 1500) || "—")}</pre></details>`, true);
-      $("#f-exp-m").focus();
+      const empty = [...document.querySelectorAll("#lots .lm")].find(s => !s.value); if (empty) empty.focus();
     }
   } catch { setStatus("Не вдалося завантажити розпізнавання — перевірте інтернет або оберіть дату вручну.", true); }
 }
@@ -419,7 +500,7 @@ function analyzeLine(line){
         if (md) { const k = rxDose[0] / md; note = Number.isInteger(k) && k > 1 ? `${rxDose[0]} = ${k} × ${md} (якщо форму можна ділити/поєднувати — уточніть у лікаря)` : `призначено ${rxDose[0]}, удома ${m.strength}`; }
       }
       if (type === "combo") note = "діюча речовина у складі комбінованого препарату — інші компоненти можуть бути зайві";
-      matches.push({ m, type, st: statusOf(m), note });
+      matches.push({ m, type, st: bestStatus(m), note });
     }
   }
   const usable = t => matches.some(x => x.type === t && x.st.k !== "expired");
@@ -435,8 +516,8 @@ const VERDICT = { have: ["Є вдома", "b-ok"], have_other_dose: ["Є, інш
   need_buy: ["Треба купити", "b-soon"], unknown: ["Не знайдено в довіднику", "b-unknown"] };
 const MTYPE = { same: "та сама речовина", dose: "інше дозування", combo: "у складі комбінованого", part: "частково збігається склад" };
 function medLine(m){
-  const st = statusOf(m);
-  return `<b>${esc(m.name)}</b> ${esc(m.strength || "")}${m.form ? " · " + esc(m.form) : ""} <span class="badge b-${st.k}" style="margin-left:4px">${esc(badgeText(st))}</span>${m.location || m.qty ? `<div style="color:var(--muted);font-size:13px">${esc([m.location, m.qty].filter(Boolean).join(" · "))}</div>` : ""}`;
+  const st = bestStatus(m);
+  return `<b>${esc(m.name)}</b> ${esc(m.strength || "")}${m.form ? " · " + esc(m.form) : ""} <span class="badge b-${st.k}" style="margin-left:4px">${esc(badgeText(st))}</span><div style="color:var(--muted);font-size:13px">${esc([lotsText(m), m.location].filter(Boolean).join(" · "))}</div>`;
 }
 function analyzeRx(){
   const text = $("#rx-text").value.trim();
@@ -501,6 +582,7 @@ function bindUI(){
     if (a === "close") closeSheet();
     if (a === "edit") editMed(id);
     if (a === "del") confirmDelete(id);
+    if (a === "rm-lot") { b.disabled = true; await removeLot(id, +b.dataset.i); }
     if (a === "del-yes") { b.disabled = true; try { await store.deleteMed(state.hh.id, id); closeSheet(); toast("Видалено"); } catch { toast("Не вдалося видалити"); b.disabled = false; } }
     if (a === "add-member") {
       const em = String($("#newMember").value || "").trim().toLowerCase();
@@ -532,7 +614,11 @@ function bindUI(){
   $("#btnClear").onclick = clearForm;
   F("name").onchange = onNameChange;
   F("inn").oninput = () => { state.formLatin = null; updateDup(); };
-  F("expiry").oninput = updateExpHint;
+  $("#lots").addEventListener("change", onLotsChange);
+  $("#lots").addEventListener("input", e => { if (e.target.classList.contains("lq")) onLotsChange(e); });
+  $("#lots").onclick = e => { const b = e.target.closest("[data-del]"); if (b) { state.lots.splice(+b.dataset.del, 1); if (!state.lots.length) state.lots.push({ expiry: "", qty: "" }); renderLots(); } };
+  $("#btnAddLot").onclick = () => { state.lots.push({ expiry: "", qty: "" }); renderLots(); $("#lots").lastElementChild.querySelector(".lm").focus(); };
+  $("#capStatus").onclick = e => { const b = e.target.closest("[data-addlot]"); if (b) addLotTo(b.dataset.addlot, b.dataset.exp); };
   $("#btnAnalyze").onclick = analyzeRx;
 }
 boot();

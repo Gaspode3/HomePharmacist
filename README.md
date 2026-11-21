@@ -42,7 +42,7 @@
 ## Модель даних (Firestore)
 ```
 households/{hid}            { name, owner, ownerEmail, members: [email] }
-households/{hid}/meds/{id}  { name, inn[], innLatin[], strength, form, expiry: "YYYY-MM"|"YYYY-MM-DD",
+households/{hid}/meds/{id}  { name, inn[], innLatin[], strength, form, lots: [{ expiry, qty }], expiry: найближчий термін,
                               qty, category, location, notes, barcode, addedAt, addedBy, updatedAt, updatedBy }
 households/{hid}/barcodes/{code}  { name, inn[], innLatin[], strength, form, category }
 invites/{email}             { hid }

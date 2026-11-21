@@ -139,3 +139,18 @@
   .exprow{display:grid;grid-template-columns:1fr 1fr;gap:6px}
   .exprow select{width:100%;border:1px solid var(--line);border-radius:12px;padding:11px 8px;background:#fbfcfc;font-weight:700}
   details.ocrraw{margin-top:8px;font-size:12px;color:var(--muted)} details.ocrraw pre{white-space:pre-wrap;word-break:break-word;max-height:140px;overflow:auto}
+
+  .lot{border:1px solid var(--line);border-radius:14px;padding:10px;margin-bottom:8px;background:#fbfcfc}
+  .lot.s-expired{border-color:#f0b4b4;background:var(--red-soft)}
+  .lothead{display:flex;align-items:center;justify-content:space-between;font-size:13px;font-weight:700;color:var(--muted);margin-bottom:6px}
+  .lothead button{border:0;background:none;color:var(--red);font-weight:700;font-size:13px;padding:2px 0}
+  .lotgrid{display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:6px}
+  .lotgrid select,.lotgrid input{width:100%;min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px 6px;background:#fff;font-weight:600}
+  .lot .hint{margin-top:5px}
+  .lots-view{margin:8px 0 14px;display:flex;flex-direction:column;gap:6px}
+  .lotline{display:flex;align-items:center;gap:8px;font-size:14px;padding:8px 10px;border-radius:10px;background:#f6f8f7}
+  .lotline span.t{flex:1}
+  .lotline button{border:0;background:var(--red-soft);color:var(--red);border-radius:8px;padding:4px 9px;font-weight:700;font-size:12px}
+  .capbtn{margin-top:8px;border:0;background:var(--accent);color:#fff;border-radius:10px;padding:8px 12px;font-weight:700}
+  .lotline{flex-wrap:wrap} .lotline span.t{flex:1 1 100%}
+  .lotline .badge{margin-right:auto}
