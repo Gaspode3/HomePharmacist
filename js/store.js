@@ -106,7 +106,7 @@ export function setCode(hid, code, prod){
 
 /* ---------- розпізнавання фото через Gemini (Firebase AI Logic, безкоштовний рівень) ---------- */
 // Моделі по черзі: якщо одна недоступна/перевантажена — пробуємо наступну.
-export const AI_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+export const AI_MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-3.5-flash-lite"];
 let aiMod = null, aiInst = null;
 async function getAI(){
   if (!aiMod) aiMod = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-ai.js`);
