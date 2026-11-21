@@ -1,6 +1,6 @@
 import * as store from "./store.js";
-import { parseGS1, startLiveScan, fileToImage, decodeImage, ocrExpiry } from "./scan.js";
-import { DRUGS, findDrug, norm, BRAND_LIST } from "./drugs.js";
+import { parseGS1, startLiveScan, fileToImage, decodeImage, ocrPhoto, pickExpiry } from "./scan.js";
+import { DRUGS, findDrug, norm, BRAND_LIST, guessDrugs, guessStrength, guessForm } from "./drugs.js";
 
 /* ============ helpers ============ */
 const $ = s => document.querySelector(s);
@@ -452,20 +452,41 @@ async function codeFromPhoto(file){
   if (raw) await applyCode(raw);
   else setStatus("Код не знайдено. Сфотографуйте ближче, рівно і при доброму світлі.", true);
 }
-async function dateFromPhoto(file){
-  setStatus(`<span class="spin"></span>Шукаю дату… (перший раз довше — завантажується розпізнавання)`);
+let lastGuesses = [];
+function applyGuess(g, overwrite){
+  const d = g.d, set = (id, v) => { if (v && (overwrite || !F(id).value.trim())) F(id).value = v; };
+  set("name", d.home ? d.home.name : d.b[0]);
+  set("inn", d.i.join(", ")); state.formLatin = d.l && d.l.length ? d.l : state.formLatin;
+  set("category", d.c);
+  if (d.home) { set("strength", d.home.strength); set("form", d.home.form); set("location", d.home.location); }
+  updateDup();
+}
+async function photoRecognize(file){
+  setStatus(`<span class="spin"></span>Розпізнаю… (перший раз довше — завантажується розпізнавання)`);
+  let r;
   try {
-    const r = await ocrExpiry(file, (p, label) => setStatus(`<span class="spin"></span>${esc(label || "Читаю дату…")} ${p ? p + "%" : ""}`));
-    if (r.expiry) {
-      if (r.source === "datamatrix") { await applyCode(r.text); return; }
-      const p = putExpiry(r.expiry);
-      setStatus(`Знайдено дату: <b>${esc(fmtExpiry(r.expiry))}</b>${p.added ? ` — додано як партію ${p.i + 1}` : ""}. Перевірте, що це саме термін придатності.`);
-    } else {
-      setStatus(`Дату не розпізнано. Рельєфні (вибиті) дати на фользі блістера телефон прочитати не може — оберіть <b>місяць і рік</b> нижче. Друковану дату на коробці сфотографуйте ближче й рівно.
-        <details class="ocrraw"><summary>Що вдалося прочитати</summary><pre>${esc((r.text || "").trim().slice(0, 1500) || "—")}</pre></details>`, true);
-      const empty = [...document.querySelectorAll("#lots .lm")].find(s => !s.value); if (empty) empty.focus();
-    }
-  } catch { setStatus("Не вдалося завантажити розпізнавання — перевірте інтернет або оберіть дату вручну.", true); }
+    r = await ocrPhoto(file, (p, label) => setStatus(`<span class="spin"></span>${esc(label || "Читаю…")} ${p ? p + "%" : ""}`),
+      (text, dm) => (dm && dm.expiry || pickExpiry(text)) && (guessDrugs(text, state.meds)[0] || { score: 0 }).score >= 1.7);
+  } catch { setStatus("Не вдалося завантажити розпізнавання — перевірте інтернет або заповніть вручну.", true); return; }
+  // DataMatrix: код + точна дата; відомий код — заповнить препарат
+  if (r.dm && (r.dm.gtin || r.dm.expiry)) { await applyCode(r.dm.raw); if (state.meds.some(m => codeKey(m.barcode) === codeKey(r.dm.gtin)) && !state.editingId) return; }
+  const found = [];
+  const exp = (r.dm && r.dm.expiry) || pickExpiry(r.text);
+  if (exp && !(r.dm && r.dm.expiry)) { const p = putExpiry(exp); found.push(`термін <b>${esc(fmtExpiry(exp))}</b>${p.added ? ` (партія ${p.i + 1})` : ""}`); }
+  lastGuesses = guessDrugs(r.text, state.meds);
+  const top = lastGuesses[0];
+  if (top && top.score >= 1.7) { applyGuess(top, false); found.unshift(`<b>${esc(top.d.home ? top.d.home.name : top.d.b[0])}</b>`); }
+  const strength = guessStrength(r.text);
+  if (strength && !F("strength").value.trim()) { F("strength").value = strength; found.push(`дозування <b>${esc(strength)}</b>`); }
+  const form = guessForm(r.text);
+  if (form && !F("form").value.trim()) { F("form").value = form; found.push(esc(form)); }
+  const others = lastGuesses.filter(g => g !== top || top.score < 1.7);
+  const chips = others.length ? `<div style="margin-top:8px">${top && top.score >= 1.7 ? "Або це:" : "Схоже на:"} ${others.map((g, i) =>
+      `<button type="button" class="chip" style="margin:4px 4px 0 0" data-guess="${lastGuesses.indexOf(g)}">${esc(g.d.home ? g.d.home.name : g.d.b[0])}</button>`).join("")}</div>` : "";
+  const raw = `<details class="ocrraw"><summary>Що вдалося прочитати</summary><pre>${esc(r.text.replace(/\n{2,}/g, "\n").trim().slice(0, 1500) || "—")}</pre></details>`;
+  if (found.length) setStatus(`Розпізнано: ${found.join(", ")}. Перевірте поля.${chips}${!exp ? "<br>Дату не знайдено — оберіть місяць і рік нижче." : ""}${raw}`);
+  else setStatus(`Не вдалося впевнено прочитати упаковку.${chips} Найкраще розпізнається коробка: рівно, зблизька, при доброму світлі. Текст на зім'ятій фользі й рельєфні дати телефон майже не читає.${raw}`, !chips);
+  if (!F("name").value.trim()) F("name").focus();
 }
 
 /* ============ призначення лікаря (без ШІ) ============ */
@@ -609,7 +630,7 @@ function bindUI(){
   $("#btnCodePhoto").onclick = () => $("#inCodePhoto").click();
   $("#inCodePhoto").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) codeFromPhoto(f); };
   $("#btnOcr").onclick = () => $("#inOcr").click();
-  $("#inOcr").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) dateFromPhoto(f); };
+  $("#inOcr").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) photoRecognize(f); };
   $("#medForm").onsubmit = onSubmit;
   $("#btnClear").onclick = clearForm;
   F("name").onchange = onNameChange;
@@ -618,7 +639,11 @@ function bindUI(){
   $("#lots").addEventListener("input", e => { if (e.target.classList.contains("lq")) onLotsChange(e); });
   $("#lots").onclick = e => { const b = e.target.closest("[data-del]"); if (b) { state.lots.splice(+b.dataset.del, 1); if (!state.lots.length) state.lots.push({ expiry: "", qty: "" }); renderLots(); } };
   $("#btnAddLot").onclick = () => { state.lots.push({ expiry: "", qty: "" }); renderLots(); $("#lots").lastElementChild.querySelector(".lm").focus(); };
-  $("#capStatus").onclick = e => { const b = e.target.closest("[data-addlot]"); if (b) addLotTo(b.dataset.addlot, b.dataset.exp); };
+  $("#capStatus").onclick = e => {
+    const b = e.target.closest("[data-addlot]"); if (b) { addLotTo(b.dataset.addlot, b.dataset.exp); return; }
+    const g = e.target.closest("[data-guess]");
+    if (g) { const x = lastGuesses[+g.dataset.guess]; if (x) { applyGuess(x, true); g.parentElement.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c === g)); } }
+  };
   $("#btnAnalyze").onclick = analyzeRx;
 }
 boot();

@@ -209,29 +209,28 @@ async function getWorker(){
   return workerP;
 }
 
-// Повертає { expiry, text, source: "datamatrix" | "ocr" }.
-export async function ocrExpiry(file, onProgress){
+// Розпізнати фото упаковки/блістера: DataMatrix + текст кількома проходами (повороти, режими).
+// enough(allText) → true, коли вже знайдено достатньо, щоб не робити зайвих проходів.
+// Повертає { dm: parseGS1(...) | null, text }.
+export async function ocrPhoto(file, onProgress, enough){
   const r = await fileToImage(file);
   if (!r) throw new Error("image");
   try {
-    // 1) на фото може бути DataMatrix — тоді дата точна
+    let dm = null;
     const raw = await decodeImage(r.img);
-    if (raw) { const g = parseGS1(raw); if (g.expiry) return { expiry: g.expiry, text: raw, source: "datamatrix", code: g.gtin || raw }; }
-    // 2) OCR кількома проходами: розріджений текст, блок тексту, повернуте фото
+    if (raw) dm = parseGS1(raw);
     onProgress && onProgress(0, "Завантажую розпізнавання…");
     const w = await getWorker();
-    const passes = [[0, "11"], [0, "6"], [90, "11"], [270, "11"], [180, "11"]];
+    const passes = [[0, "11"], [90, "11"], [270, "11"], [0, "6"], [180, "11"]];
     const texts = [];
     for (let i = 0; i < passes.length; i++) {
       const [rot, psm] = passes[i];
-      progressCb = p => onProgress && onProgress(Math.round(((i + p) / passes.length) * 100), "Читаю дату…");
+      progressCb = p => onProgress && onProgress(Math.round(((i + p) / passes.length) * 100), "Читаю текст…");
       await w.setParameters({ tessedit_pageseg_mode: psm });
       const res = await w.recognize(prepCanvas(r.img, rot));
-      const text = res && res.data ? res.data.text : "";
-      texts.push(text);
-      const exp = pickExpiry(text);
-      if (exp) return { expiry: exp, text, source: "ocr" };
+      texts.push(res && res.data ? res.data.text : "");
+      if (enough && enough(texts.join("\n"), dm)) break;
     }
-    return { expiry: null, text: texts.join("\n---\n"), source: "ocr" };
+    return { dm, text: texts.join("\n") };
   } finally { progressCb = null; URL.revokeObjectURL(r.url); }
 }

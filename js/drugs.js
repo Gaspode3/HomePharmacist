@@ -167,3 +167,94 @@ export function findDrug(text){
 }
 
 export const BRAND_LIST = [...new Set(DRUGS.flatMap(d => d.b))].sort((a, b) => a.localeCompare(b, "uk"));
+
+/* ---------- вгадування препарату з розпізнаного тексту (OCR) ---------- */
+// Латинські літери, схожі на кириличні, і типові помилки OCR → кирилиця.
+const HOMO = { A: "А", B: "В", C: "С", E: "Е", H: "Н", I: "І", K: "К", M: "М", O: "О", P: "Р", T: "Т", X: "Х", Y: "У", "3": "З", "0": "О", "6": "Б", "4": "Ч", N: "П", R: "Я", D: "Д", L: "Л", U: "И", F: "Ф", G: "Г", Z: "З", S: "З" };
+const up = s => String(s || "").toUpperCase().replace(/Ё/g, "Е").replace(/Ї/g, "І").replace(/Є/g, "Е").replace(/И/g, "И").replace(/Ґ/g, "Г");
+function cyr(word){ return up(word).replace(/[A-Z0-9]/g, ch => HOMO[ch] || ch).replace(/[^А-ЯІ]/g, ""); }
+function lev(a, b){
+  const m = a.length, n = b.length; if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
+}
+// Найкраща схожість назви з будь-яким словом (або парою сусідніх слів) тексту: 0..1
+function bestSim(name, words){
+  const n = cyr(name); if (n.length < 4) return 0;
+  let best = 0;
+  for (let i = 0; i < words.length; i++) {
+    for (const w of [words[i], words[i] + (words[i + 1] || "")]) {
+      if (w.length < 3) continue;
+      // слово тексту може мати відмінкове закінчення (ПАРАЦЕТАМОЛУ) — порівнюємо з початком
+      const cut = w.length > n.length ? w.slice(0, n.length + 1) : w;
+      const s = 1 - Math.min(lev(n, cut), lev(n, w)) / Math.max(n.length, 1);
+      if (s > best) best = s;
+      if (w.includes(n)) best = 1;
+    }
+  }
+  return best;
+}
+// Скільки схожості вимагати: короткі назви — лише точний збіг (інакше шум дає хибні збіги).
+const need = name => { const n = cyr(name).length; return n <= 5 ? 1 : n <= 7 ? 0.86 : 0.78; };
+// Повертає до 5 кандидатів [{ d, score, why }] — запис довідника або власні ліки (d.home).
+export function guessDrugs(text, homeMeds){
+  const words = String(text || "").split(/[^A-Za-zА-Яа-яІіЇїЄєҐґ0-9]+/).map(cyr).filter(w => w.length >= 3);
+  if (!words.length) return [];
+  const innCache = {};
+  const innSim = i => innCache[i] ?? (innCache[i] = bestSim(i.split(" ")[0], words));
+  const innNames = new Set(DRUGS.flatMap(x => x.i.map(i => cyr(i.split(" ")[0]))));
+  const res = [];
+  for (const d of DRUGS) {
+    let brand = 0, bn = "";
+    for (const b of d.b) {
+      if (innNames.has(cyr(b))) continue;            // «Парацетамол» як бренд = назва речовини, рахуємо як склад
+      const s = bestSim(b, words);
+      if (s >= need(b) && s > brand) { brand = s; bn = b; }
+    }
+    const found = d.i.filter(i => innSim(i) >= need(i.split(" ")[0]));
+    const allInn = d.i.length && found.length === d.i.length;
+    let score = 0, why = "";
+    if (brand) { score = 1 + brand; why = bn; }
+    else if (allInn) { score = 0.6 + 0.1 * d.i.length; why = "склад: " + d.i.join(" + "); }
+    if (score) res.push({ d, score, why });
+  }
+  // якщо знайдено повний склад комбінованого препарату — однокомпонентні з тих самих речовин нижче
+  const combos = res.filter(r => r.d.i.length > 1);
+  for (const r of res) if (r.why.startsWith("склад") && combos.some(c => c !== r && c.d.i.length > r.d.i.length && r.d.i.every(i => c.d.i.includes(i)))) r.score -= 0.15;
+  for (const m of homeMeds || []) {
+    const s = bestSim(m.name, words);
+    if (s >= need(m.name)) res.push({ d: { b: [m.name], i: m.inn || [], l: m.innLatin || [], c: m.category || "", home: m }, score: 1.05 + s, why: "вже є вдома" });
+  }
+  res.sort((a, b) => b.score - a.score);
+  const seen = new Set(), out = [];
+  for (const r of res) { const k = r.d.b[0]; if (!seen.has(k)) { seen.add(k); out.push(r); } if (out.length >= 4) break; }
+  return out;
+}
+// Дозування: «500 мг», «875 мг/125 мг», «15 mg (мг)». Повертає рядок або "".
+export function guessStrength(text){
+  let t = String(text || ""), prev;
+  do { prev = t; t = t.replace(/[OО](?=\d)|(?<=\d)[OО]/g, "0"); } while (t !== prev);
+  const re = /(\d{1,4}(?:[.,]\d{1,2})?)\s*(мг|mg|мкг|mcg|г\b|мл|ml|МО|ОД|IU|%)/gi;
+  const seen = [], units = [];
+  let m;
+  while ((m = re.exec(t))) {
+    const v = m[1].replace(",", "."), u = m[2].toLowerCase().replace("mg", "мг").replace("ml", "мл").replace("mcg", "мкг");
+    if (+v === 0 || +v > 5000 || seen.includes(v)) continue;
+    seen.push(v); units.push(u);
+    if (seen.length >= 3) break;
+  }
+  if (!seen.length) return "";
+  return units.every(u => u === units[0]) ? seen.join("/") + " " + units[0] : seen.map((v, i) => v + " " + units[i]).join(" / ");
+}
+export function guessForm(text){
+  const t = up(text);
+  const forms = [["ТАБЛЕТ", "таблетки"], ["TABLET", "таблетки"], ["КАПСУЛ", "капсули"], ["CAPSUL", "капсули"], ["СИРОП", "сироп"], ["КРАПЛ", "краплі"],
+    ["МАЗЬ", "мазь"], ["ГЕЛЬ", "гель"], ["СПРЕЙ", "спрей"], ["ПОРОШОК", "порошок"], ["СУПОЗИТОР", "супозиторії"], ["РОЗЧИН", "розчин"], ["ЛЬОДЯН", "льодяники"]];
+  for (const [k, v] of forms) if (t.includes(k)) return v;
+  return "";
+}

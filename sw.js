@@ -1,5 +1,5 @@
 // Кеш оболонки додатку, щоб він відкривався без інтернету. Дані кешує сам Firebase.
-const CACHE = "aptechka-v4";
+const CACHE = "aptechka-v5";
 const SHELL = ["./", "index.html", "css/app.css", "js/app.js", "js/store.js", "js/scan.js", "js/drugs.js", "js/firebase-config.js",
   "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
