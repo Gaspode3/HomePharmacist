@@ -88,6 +88,21 @@ export function deleteMed(hid, id){
   return Promise.race([p, new Promise(r => setTimeout(r, 1500))]);
 }
 
+/* ---------- аптечки (велика, мала…) ---------- */
+export function watchKits(hid, cb, onErr){
+  return fb.onSnapshot(fb.collection(db, "households", hid, "kits"),
+    snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))), e => onErr && onErr(e));
+}
+export const newKitId = hid => fb.doc(fb.collection(db, "households", hid, "kits")).id;
+export function saveKit(hid, id, body){
+  const p = fb.setDoc(fb.doc(db, "households", hid, "kits", id), body);
+  return Promise.race([p, new Promise(r => setTimeout(r, 1500))]);
+}
+export function deleteKit(hid, id){
+  const p = fb.deleteDoc(fb.doc(db, "households", hid, "kits", id));
+  return Promise.race([p, new Promise(r => setTimeout(r, 1500))]);
+}
+
 /* ---------- запам'ятовані штрих-коди ---------- */
 export async function getCode(hid, code){
   try { const s = await fb.getDoc(fb.doc(db, "households", hid, "barcodes", code)); return s.exists() ? s.data() : null; }

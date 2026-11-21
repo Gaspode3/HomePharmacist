@@ -45,6 +45,7 @@ households/{hid}            { name, owner, ownerEmail, members: [email] }
 households/{hid}/meds/{id}  { name, inn[], innLatin[], strength, form, lots: [{ expiry, qty }], expiry: найближчий термін,
                               qty, category, location, notes, barcode, addedAt, addedBy, updatedAt, updatedBy }
 households/{hid}/barcodes/{code}  { name, inn[], innLatin[], strength, form, category }
+households/{hid}/kits/{kitId}     { name, small, default, createdAt }   — аптечки; med.kitId, без kitId = основна
 invites/{email}             { hid }
 ```
 Термін лише з місяцем означає «до кінця місяця».

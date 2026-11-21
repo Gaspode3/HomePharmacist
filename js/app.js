@@ -15,7 +15,7 @@ function show(id){
   $("#tabs").hidden = id !== "s-app";
 }
 
-const state = { user: null, hh: null, meds: [], loaded: false, filter: "all", q: "", tab: "list",
+const state = { user: null, hh: null, meds: [], kits: [], kit: (() => { try { return localStorage.getItem("pharm.kit") || "all"; } catch { return "all"; } })(), loaded: false, filter: "all", q: "", tab: "list",
   editingId: null, formLatin: null, formExtra: null, unsub: [] };
 
 /* ============ термін придатності ============ */
@@ -113,7 +113,7 @@ async function boot(){
     await openHousehold();
   });
 }
-function stopWatching(){ state.unsub.forEach(u => { try { u(); } catch {} }); state.unsub = []; state.hh = null; state.meds = []; state.loaded = false; }
+function stopWatching(){ state.unsub.forEach(u => { try { u(); } catch {} }); state.unsub = []; state.hh = null; state.meds = []; state.kits = []; state.loaded = false; }
 
 async function openHousehold(){
   const email = store.emailOf(state.user);
@@ -130,6 +130,11 @@ async function openHousehold(){
     if (!(h.members || []).includes(email)) { toast("Вас видалили з цієї аптечки"); stopWatching(); $("#joinEmail").textContent = email; show("s-join"); return; }
     state.hh = h; $("#hhName").textContent = h.name || "Домашня аптечка";
   }));
+  state.unsub.push(store.watchKits(hh.id, kits => {
+    state.kits = kits.sort((x, y) => (y.default ? 1 : 0) - (x.default ? 1 : 0) || String(x.createdAt || "").localeCompare(String(y.createdAt || "")));
+    if (state.kit !== "all" && !state.kits.some(k => k.id === state.kit)) setKit("all");
+    renderKitSelect(); render();
+  }, () => {}));
   const timer = setTimeout(() => { if (!state.loaded) $("#banner").textContent = "Не вдалося зв'язатися з базою — показую збережене на телефоні."; }, 10000);
   state.unsub.push(store.watchMeds(hh.id, (meds, fromCache) => {
     state.meds = meds; state.loaded = true;
@@ -162,6 +167,130 @@ async function lookupCode(code){
   return store.getCode(state.hh.id, k);
 }
 
+/* ============ аптечки ============ */
+const defaultKitId = () => (state.kits.find(k => k.default) || state.kits[0] || {}).id || "";
+const kitOf = m => state.kits.some(k => k.id === m.kitId) ? m.kitId : defaultKitId();
+const kitById = id => state.kits.find(k => k.id === id);
+const kitName = id => (kitById(id) || {}).name || "Аптечка";
+const inCurrentKit = m => state.kit === "all" || !state.kits.length || kitOf(m) === state.kit;
+function setKit(id){ state.kit = id; try { localStorage.setItem("pharm.kit", id); } catch {} }
+function renderKitBar(){
+  const bar = $("#kitbar");
+  if (!state.kits.length) {
+    bar.innerHTML = `<button class="kitchip add" data-kit-new="1">+ Ще одна аптечка (напр. мала на щодень)</button>`;
+    return;
+  }
+  const cnt = id => state.meds.filter(m => kitOf(m) === id).length;
+  bar.innerHTML = `<button class="kitchip ${state.kit === "all" ? "on" : ""}" data-kit="all">Усі · ${state.meds.length}</button>` +
+    state.kits.map(k => `<button class="kitchip ${state.kit === k.id ? "on" : ""}" data-kit="${esc(k.id)}">${k.small ? "🎒 " : "🧰 "}${esc(k.name)} · ${cnt(k.id)}</button>`).join("") +
+    `<button class="kitchip add" data-kit-new="1" aria-label="Нова аптечка">+</button>`;
+}
+function renderKitSelect(){
+  const sel = $("#f-kit"), wrap = $("#kitField");
+  if (!state.kits.length) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  const cur = sel.value;
+  sel.innerHTML = state.kits.map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join("");
+  sel.value = state.kits.some(k => k.id === cur) ? cur : (state.kit !== "all" && kitById(state.kit) ? state.kit : defaultKitId());
+}
+function openKitForm(id){
+  const k = id ? kitById(id) : null;
+  const first = !state.kits.length;
+  openSheet(`<h3>${k ? "Аптечка" : "Нова аптечка"}</h3>
+    ${first ? `<p class="muted">Ліки, що вже є, залишаться в «Великій аптечці». Нову можна наповнити, переносячи блістери чи ліки з великої.</p>` : ""}
+    <div class="field"><label for="kitName">Назва</label><input id="kitName" value="${esc(k ? k.name : (first ? "Мала аптечка" : ""))}" placeholder="Мала аптечка, в машину, на дачу…"></div>
+    <label style="display:flex;gap:10px;align-items:flex-start;font-size:14px;margin-bottom:14px"><input type="checkbox" id="kitSmall" ${(k ? k.small : first) ? "checked" : ""} style="margin-top:3px">
+      <span>Мала аптечка на щодень — показувати, що варто в ній мати</span></label>
+    <div class="btnrow">${k ? `<button class="btn ghost" data-act="kit-del" data-id="${esc(k.id)}">Видалити</button>` : `<button class="btn ghost" data-act="close">Скасувати</button>`}
+      <button class="btn" data-act="kit-save" data-id="${esc(k ? k.id : "")}">Зберегти</button></div>`);
+  setTimeout(() => $("#kitName") && $("#kitName").focus(), 50);
+}
+async function saveKitForm(id){
+  const name = $("#kitName").value.trim(); if (!name) { $("#kitName").focus(); return; }
+  const small = $("#kitSmall").checked, hid = state.hh.id, now = new Date().toISOString();
+  if (!state.kits.length) await store.saveKit(hid, store.newKitId(hid), { name: "Велика аптечка", small: false, default: true, createdAt: now });
+  const kid = id || store.newKitId(hid);
+  const { id: _drop, ...prev } = id ? kitById(id) || {} : {};
+  await store.saveKit(hid, kid, { ...prev, name, small, createdAt: prev.createdAt || now });
+  closeSheet(); if (!id) { setKit(kid); toast("Аптечку створено"); } render();
+}
+async function deleteKitAsk(id){
+  const k = kitById(id); if (!k) return;
+  const n = state.meds.filter(m => kitOf(m) === id).length;
+  if (k.default) { toast("Основну аптечку не можна видалити — перейменуйте її"); return; }
+  openSheet(`<h3>Видалити «${esc(k.name)}»?</h3><p class="muted">${n ? `${n} ліків з неї переїдуть у «${esc(kitName(defaultKitId()))}».` : "Вона порожня."}</p>
+    <div class="btnrow"><button class="btn ghost" data-act="close">Скасувати</button><button class="btn danger" data-act="kit-del-yes" data-id="${esc(id)}">Видалити</button></div>`);
+}
+async function deleteKitYes(id){
+  const def = defaultKitId();
+  for (const m of state.meds.filter(m => m.kitId === id)) await moveMed(m.id, def, true);
+  await store.deleteKit(state.hh.id, id);
+  closeSheet(); setKit("all"); render(); toast("Аптечку видалено");
+}
+const sameProduct = (a, b) => norm(a.name) === norm(b.name) && norm(a.strength) === norm(b.strength);
+// Перенести всі ліки в іншу аптечку (якщо там уже є такі самі — партії об'єднуються)
+async function moveMed(id, target, quiet){
+  const m = state.meds.find(x => x.id === id); if (!m || kitOf(m) === target && m.kitId) return;
+  const twin = state.meds.find(x => x.id !== id && kitOf(x) === target && sameProduct(x, m));
+  if (twin) {
+    const n = normalizeLots([...lotsOf(twin), ...lotsOf(m)]);
+    await saveMed({ ...twin, ...n });
+    await store.deleteMed(state.hh.id, id);
+  } else await saveMed({ ...m, kitId: target });
+  if (!quiet) { closeSheet(); toast(`Перенесено в «${kitName(target)}»`); }
+}
+// Перенести одну партію (блістер) в іншу аптечку
+async function moveLot(id, i, target){
+  const m = state.meds.find(x => x.id === id); if (!m) return;
+  const ls = lotsOf(m), lot = ls[i]; if (!lot) return;
+  if (ls.length <= 1) return moveMed(id, target);
+  const twin = state.meds.find(x => x.id !== id && kitOf(x) === target && sameProduct(x, m));
+  if (twin) await saveMed({ ...twin, ...normalizeLots([...lotsOf(twin), lot]) });
+  else {
+    const { id: _, addedAt, addedBy, updatedAt, updatedBy, ...rest } = m;
+    await saveMed({ ...rest, kitId: target, ...normalizeLots([lot]) });
+  }
+  ls.splice(i, 1);
+  await saveMed({ ...m, ...normalizeLots(ls) });
+  closeSheet(); toast(`Партію перенесено в «${kitName(target)}»`);
+}
+function askMove(id, i){
+  const m = state.meds.find(x => x.id === id); if (!m) return;
+  const cur = kitOf(m), lot = i != null ? lotsOf(m)[i] : null;
+  openSheet(`<h3>Перенести ${lot ? "партію" : "ліки"}</h3>
+    <p class="muted">${esc(m.name)}${lot ? " · " + (lot.expiry ? "до " + esc(fmtExpiry(lot.expiry)) : "без дати") + (lot.qty ? " · " + esc(lot.qty) : "") : ""} — зараз у «${esc(kitName(cur))}». Куди?</p>
+    ${state.kits.filter(k => k.id !== cur).map(k => `<button class="btn ghost" style="margin-bottom:8px" data-act="move-to" data-id="${esc(id)}" data-i="${i != null ? i : ""}" data-kit="${esc(k.id)}">${k.small ? "🎒 " : "🧰 "}${esc(k.name)}</button>`).join("")}
+    <button class="btn ghost" data-act="close">Скасувати</button>`);
+}
+
+/* ---- що варто мати в малій аптечці (загальні рекомендації для дорослих) ---- */
+const SMALL_KIT = [
+  { t: "Знеболювальне / жарознижувальне", inn: ["ібупрофен", "парацетамол"], hint: "ібупрофен 200–400 мг або парацетамол 500 мг" },
+  { t: "Протиалергічне", inn: ["цетиризин", "левоцетиризин", "лоратадин", "дезлоратадин", "фексофенадин"], hint: "цетиризин 10 мг або лоратадин 10 мг" },
+  { t: "Від діареї", inn: ["лоперамід"], hint: "лоперамід 2 мг" },
+  { t: "Сорбент", inn: ["діосмектит", "поліметилсилоксану полігідрат", "кремнію діоксид", "вугілля активоване"], hint: "смекта або ентеросгель" },
+  { t: "Регідратація", inn: ["натрію цитрат", "натрію хлорид"], hint: "регідрон (пакетики)" },
+  { t: "Від печії", inn: ["кальцію карбонат", "алюмінію гідроксид", "натрію альгінат"], hint: "ренні або альмагель" },
+  { t: "Спазмолітик", inn: ["дротаверин"], hint: "дротаверин (но-шпа) 40 мг" },
+  { t: "Антисептик для ран", inn: ["хлоргексидин", "повідон-йод", "декаметоксин", "мірамістин", "водню пероксид"], hint: "хлоргексидин 0,05% або повідон-йод" },
+  { t: "Від опіків і подряпин", inn: ["декспантенол"], hint: "пантенол / бепантен" },
+];
+function smallKitPanel(kitId){
+  const has = (inns, pred) => state.meds.filter(m => pred(m) && bestStatus(m).k !== "expired" && (m.inn || []).some(i => inns.includes(String(i).toLowerCase())));
+  const rows = SMALL_KIT.map(r => {
+    const here = has(r.inn, m => kitOf(m) === kitId);
+    const other = here.length ? [] : has(r.inn, m => kitOf(m) !== kitId);
+    const st = here.length ? "ok" : other.length ? "move" : "buy";
+    return `<div class="rec rec-${st}"><span class="ri">${st === "ok" ? "✓" : st === "move" ? "⇄" : "✗"}</span><div class="rt"><b>${esc(r.t)}</b>
+      <div class="muted">${st === "ok" ? esc(here.map(m => m.name).join(", ")) : st === "move" ? `є в іншій аптечці: ${other.map(m => `<a href="#" data-move-rec="${esc(m.id)}">${esc(m.name)}</a>`).join(", ")} — натисніть, щоб перенести` : "немає вдома — " + esc(r.hint)}</div></div></div>`;
+  });
+  const okN = rows.filter(r => r.includes("rec-ok")).length;
+  return `<details class="panel recpanel" ${state.recOpen ? "open" : ""}><summary><b>Що варто мати в малій аптечці</b> <span class="badge ${okN === SMALL_KIT.length ? "b-ok" : "b-warn"}">${okN} з ${SMALL_KIT.length}</span></summary>
+    ${rows.join("")}
+    <div class="rec"><span class="ri">＋</span><div class="rt"><b>Не ліки, але потрібні</b><div class="muted">пластирі, кілька стерильних серветок, еластичний бинт, а також ліки, які хтось із родини приймає зараз (кладіть їх сюди)</div></div></div>
+    <p class="disclaimer">Загальний набір для дорослих. Для дітей потрібні дитячі форми й дози — уточніть у лікаря чи фармацевта.</p></details>`;
+}
+
 /* ============ список ============ */
 function sorted(meds){
   const rank = { expired: 0, soon: 1, warn: 2, ok: 3, unknown: 4 };
@@ -174,7 +303,8 @@ function matchesQ(m, q){
   return q.toLowerCase().split(/\s+/).every(w => hay.includes(w));
 }
 function render(){
-  const all = sorted(state.meds);
+  renderKitBar();
+  const all = sorted(state.meds.filter(inCurrentKit));
   const cnt = { all: all.length, expired: 0, soon: 0, unknown: 0 };
   all.forEach(({ st }) => { if (st.k === "expired") cnt.expired++; if (st.k === "soon" || st.k === "warn") cnt.soon++; if (st.k === "unknown") cnt.unknown++; });
   $("#stTotal").textContent = state.loaded ? cnt.all : "–";
@@ -184,11 +314,17 @@ function render(){
   $("#chips").innerHTML = chips.map(([k, l, n]) => `<button class="chip ${state.filter === k ? "on" : ""}" data-f="${k}">${l} · ${n}</button>`).join("");
   $("#locs").innerHTML = [...new Set(state.meds.map(m => m.location).filter(Boolean))].map(l => `<option>${esc(l)}</option>`).join("");
   if (!state.loaded) return;
+  const cur = state.kit !== "all" && kitById(state.kit);
+  $("#recSlot").innerHTML = cur && cur.small ? smallKitPanel(cur.id) : "";
   const rows = all.filter(({ m, st }) =>
     (state.filter === "all" || (state.filter === "expired" && st.k === "expired") ||
      (state.filter === "soon" && (st.k === "soon" || st.k === "warn")) || (state.filter === "unknown" && st.k === "unknown"))
     && matchesQ(m, state.q));
   const list = $("#list");
+  if (!all.length && state.meds.length) {
+    list.innerHTML = `<div class="empty"><b>У цій аптечці поки нічого</b>Додайте ліки або перенесіть блістери з іншої аптечки (відкрийте ліки → «Перенести»).<br><br><button class="btn" style="max-width:240px" data-tab-go="add">Додати ліки</button></div>`;
+    return;
+  }
   if (!state.meds.length) {
     list.innerHTML = `<div class="empty"><b>Аптечка порожня</b>Додайте перші ліки — відскануйте штрих-код або впишіть вручну.<br><br><button class="btn" style="max-width:240px" data-tab-go="add">Додати ліки</button></div>`;
     return;
@@ -199,7 +335,7 @@ function render(){
       <div class="ctop"><div class="cname">${esc(m.name)} ${m.strength ? `<small>${esc(m.strength)}</small>` : ""}</div>
         <span class="badge b-${st.k}">${esc(medBadge(m).text)}</span></div>
       <div class="cinn">${esc([(m.inn || []).join(" + "), m.form].filter(Boolean).join(" · ") || "діюча речовина не вказана")}</div>
-      <div class="cmeta">${esc([lotsText(m), m.category, m.location].filter(Boolean).join(" · "))}</div>
+      <div class="cmeta">${state.kit === "all" && state.kits.length > 1 ? `<span class="kittag">${kitById(kitOf(m)) && kitById(kitOf(m)).small ? "🎒" : "🧰"} ${esc(kitName(kitOf(m)))}</span> ` : ""}${esc([lotsText(m), m.category, m.location].filter(Boolean).join(" · "))}</div>
     </button>`).join("");
 }
 
@@ -219,6 +355,7 @@ function showMed(id){
       <dt>Діюча речовина</dt><dd>${esc((m.inn || []).join(" + ") || "—")}${m.innLatin && m.innLatin.length ? ` <span style="color:var(--muted)">(${esc(m.innLatin.join(" + "))})</span>` : ""}</dd>
       <dt>Форма</dt><dd>${esc(m.form || "—")}</dd>
       <dt>Для чого</dt><dd>${esc(m.category || "—")}</dd>
+      ${state.kits.length ? `<dt>Аптечка</dt><dd>${esc(kitName(kitOf(m)))}${state.kits.length > 1 ? ` · <a href="#" data-act="move" data-id="${esc(m.id)}">перенести</a>` : ""}</dd>` : ""}
       <dt>Де лежить</dt><dd>${esc(m.location || "—")}</dd>
       ${m.notes ? `<dt>Нотатки</dt><dd>${esc(m.notes)}</dd>` : ""}
       ${m.barcode ? `<dt>Штрих-код</dt><dd>${esc(m.barcode)}</dd>` : ""}
@@ -236,6 +373,7 @@ function lotsView(m){
   return `<div class="lots-view">${ls.map((l, i) => { const s = statusOf({ expiry: l.expiry });
     return `<div class="lotline"><span class="t"><b>${l.expiry ? "до " + esc(fmtExpiry(l.expiry)) : "без дати"}</b>${l.qty ? " · " + esc(l.qty) : ""}</span>
       <span class="badge b-${s.k}">${esc(badgeText(s))}</span>
+      ${state.kits.length > 1 && s.k !== "expired" ? `<button class="mv" data-act="move" data-id="${esc(m.id)}" data-i="${i}">Перенести</button>` : ""}
       <button data-act="rm-lot" data-id="${esc(m.id)}" data-i="${i}" aria-label="Прибрати">${s.k === "expired" ? "Викинув" : "Закінчився"}</button></div>`; }).join("")}</div>`;
 }
 async function removeLot(id, i){
@@ -261,6 +399,9 @@ function openMenu(){
     ${owner ? `<div class="inrow" style="margin-top:12px"><input id="newMember" type="email" placeholder="адреса Gmail" autocomplete="off"><button class="btn" data-act="add-member">Додати</button></div>
       <p class="muted">Після додавання надішліть людині посилання: <span class="mono">${esc(location.origin + location.pathname)}</span></p>`
       : `<p class="muted" style="margin-top:12px">Додавати людей може власник аптечки.</p>`}
+    <h3 style="margin-top:22px">Аптечки</h3>
+    ${state.kits.length ? state.kits.map(k => `<div class="member"><span>${k.small ? "🎒" : "🧰"} ${esc(k.name)}${k.default ? " · основна" : ""} · ${state.meds.filter(m => kitOf(m) === k.id).length} ліків</span><button style="background:var(--accent-soft);color:var(--accent)" data-act="kit-edit" data-id="${esc(k.id)}">Змінити</button></div>`).join("") : `<p class="muted">Поки одна аптечка.</p>`}
+    <button class="linkbtn" data-act="kit-new">+ Нова аптечка</button>
     <h3 style="margin-top:22px">Дані</h3>
     <p class="muted">Резервна копія всіх ліків у JSON. Імпорт приймає і файл, експортований з версії в Claude.</p>
     <div class="btnrow"><button class="btn ghost" data-act="export">Завантажити копію</button><button class="btn ghost" data-act="import-open">Імпорт</button></div>
@@ -311,7 +452,7 @@ function fillForm(m, onlyEmpty){
   const set = (id, v) => { if (v == null || v === "" || (Array.isArray(v) && !v.length)) return; if (onlyEmpty && F(id).value.trim()) return; F(id).value = Array.isArray(v) ? v.join(", ") : v; };
   set("name", m.name); set("inn", m.inn); set("strength", m.strength); set("form", m.form);
   set("category", m.category); set("location", m.location); set("notes", m.notes); set("barcode", m.barcode);
-  if (!onlyEmpty) { const ls = lotsOf(m); state.lots = ls.length ? ls : [{ expiry: "", qty: "" }]; renderLots(); }
+  if (!onlyEmpty) { const ls = lotsOf(m); state.lots = ls.length ? ls : [{ expiry: "", qty: "" }]; renderLots(); if (m.id && state.kits.length) $("#f-kit").value = kitOf(m); }
   if (m.innLatin && m.innLatin.length) state.formLatin = m.innLatin;
   updateDup();
 }
@@ -319,6 +460,7 @@ function clearForm(){
   $("#medForm").reset(); state.editingId = null; state.formLatin = null; state.formExtra = null;
   setStatus(""); $("#addTitle").textContent = "Додати ліки"; $("#btnSave").textContent = "Зберегти";
   state.lots = [{ expiry: "", qty: "" }]; renderLots();
+  if (state.kits.length) $("#f-kit").value = state.kit !== "all" && kitById(state.kit) ? state.kit : defaultKitId();
   updateDup();
 }
 function editMed(id){
@@ -394,6 +536,7 @@ async function onSubmit(ev){
   const med = { ...(state.formExtra || {}), id: state.editingId || undefined, name, inn, innLatin,
     strength: F("strength").value.trim(), form: F("form").value.trim(), lots: n.lots, expiry: n.expiry,
     qty: n.qty, category: F("category").value.trim(), location: F("location").value.trim(),
+    ...(state.kits.length ? { kitId: $("#f-kit").value || defaultKitId() } : {}),
     notes: F("notes").value.trim(), barcode: F("barcode").value.trim() };
   $("#btnSave").disabled = true;
   const ok = await saveMed(med);
@@ -588,7 +731,7 @@ const VERDICT = { have: ["Є вдома", "b-ok"], have_other_dose: ["Є, інш
 const MTYPE = { same: "та сама речовина", dose: "інше дозування", combo: "у складі комбінованого", part: "частково збігається склад" };
 function medLine(m){
   const st = bestStatus(m);
-  return `<b>${esc(m.name)}</b> ${esc(m.strength || "")}${m.form ? " · " + esc(m.form) : ""} <span class="badge b-${st.k}" style="margin-left:4px">${esc(badgeText(st))}</span><div style="color:var(--muted);font-size:13px">${esc([lotsText(m), m.location].filter(Boolean).join(" · "))}</div>`;
+  return `<b>${esc(m.name)}</b> ${esc(m.strength || "")}${m.form ? " · " + esc(m.form) : ""} <span class="badge b-${st.k}" style="margin-left:4px">${esc(badgeText(st))}</span><div style="color:var(--muted);font-size:13px">${esc([state.kits.length > 1 ? kitName(kitOf(m)) : "", lotsText(m), m.location].filter(Boolean).join(" · "))}</div>`;
 }
 function analyzeRx(){
   const text = $("#rx-text").value.trim();
@@ -619,6 +762,8 @@ function analyzeRx(){
 /* ============ навігація і події ============ */
 function switchTab(t){
   state.tab = t;
+  if (t === "add" && !state.editingId && !F("name").value.trim() && state.kits.length)
+    $("#f-kit").value = state.kit !== "all" && kitById(state.kit) ? state.kit : defaultKitId();
   ["list", "add", "rx"].forEach(k => { $("#view-" + k).hidden = k !== t; });
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
   window.scrollTo(0, 0);
@@ -642,6 +787,13 @@ function bindUI(){
   document.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => { state.filter = b.dataset.goto; switchTab("list"); render(); });
   $("#q").oninput = e => { state.q = e.target.value.trim(); render(); };
   $("#chips").onclick = e => { const b = e.target.closest("[data-f]"); if (b) { state.filter = b.dataset.f; render(); } };
+  $("#kitbar").onclick = e => {
+    const b = e.target.closest("[data-kit],[data-kit-new]"); if (!b) return;
+    if (b.dataset.kitNew) { openKitForm(null); return; }
+    setKit(b.dataset.kit); render();
+  };
+  $("#recSlot").addEventListener("toggle", e => { if (e.target.matches("details")) state.recOpen = e.target.open; }, true);
+  $("#recSlot").onclick = e => { const l = e.target.closest("[data-move-rec]"); if (l) { e.preventDefault(); askMove(l.dataset.moveRec, null); } };
   $("#list").onclick = e => {
     const go = e.target.closest("[data-tab-go]"); if (go) { switchTab(go.dataset.tabGo); return; }
     const c = e.target.closest(".card"); if (c) showMed(c.dataset.id);
@@ -654,6 +806,13 @@ function bindUI(){
     if (a === "edit") editMed(id);
     if (a === "del") confirmDelete(id);
     if (a === "rm-lot") { b.disabled = true; await removeLot(id, +b.dataset.i); }
+    if (a === "move") { e.preventDefault(); askMove(id, b.dataset.i !== undefined && b.dataset.i !== "" ? +b.dataset.i : null); }
+    if (a === "move-to") { b.disabled = true; const i = b.dataset.i; if (i !== "") await moveLot(id, +i, b.dataset.kit); else await moveMed(id, b.dataset.kit); }
+    if (a === "kit-new") openKitForm(null);
+    if (a === "kit-edit") openKitForm(id);
+    if (a === "kit-save") { b.disabled = true; await saveKitForm(id || null); }
+    if (a === "kit-del") deleteKitAsk(id);
+    if (a === "kit-del-yes") { b.disabled = true; await deleteKitYes(id); }
     if (a === "del-yes") { b.disabled = true; try { await store.deleteMed(state.hh.id, id); closeSheet(); toast("Видалено"); } catch { toast("Не вдалося видалити"); b.disabled = false; } }
     if (a === "add-member") {
       const em = String($("#newMember").value || "").trim().toLowerCase();

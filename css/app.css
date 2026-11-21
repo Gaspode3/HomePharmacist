@@ -154,3 +154,20 @@
   .capbtn{margin-top:8px;border:0;background:var(--accent);color:#fff;border-radius:10px;padding:8px 12px;font-weight:700}
   .lotline{flex-wrap:wrap} .lotline span.t{flex:1 1 100%}
   .lotline .badge{margin-right:auto}
+
+  .kitbar{display:flex;gap:8px;overflow-x:auto;margin:4px 0 10px;padding-bottom:2px;scrollbar-width:none}
+  .kitbar::-webkit-scrollbar{display:none}
+  .kitchip{flex:none;border:1.5px solid var(--accent);background:#fff;color:var(--accent);border-radius:12px;padding:8px 12px;font-weight:800;font-size:14px}
+  .kitchip.on{background:var(--accent);color:#fff}
+  .kitchip.add{border-style:dashed;font-weight:700}
+  .kittag{display:inline-block;background:var(--accent-soft);color:var(--accent);border-radius:6px;padding:1px 6px;font-weight:700;font-size:12px;margin-right:4px}
+  .field select{width:100%;border:1px solid var(--line);border-radius:12px;padding:11px 12px;background:#fbfcfc;font-weight:700}
+  .recpanel summary{cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;list-style:none}
+  .recpanel summary::-webkit-details-marker{display:none}
+  .recpanel[open] summary{margin-bottom:8px}
+  .rec{display:flex;gap:10px;padding:8px 0;border-top:1px solid var(--line);font-size:14px}
+  .rec .ri{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:13px;background:#eef1f0;color:var(--muted)}
+  .rec-ok .ri{background:var(--green-soft);color:var(--green)} .rec-move .ri{background:var(--yellow-soft);color:var(--yellow)} .rec-buy .ri{background:var(--red-soft);color:var(--red)}
+  .rec .rt{flex:1} .rec a{color:var(--accent);font-weight:700}
+  .lotline button.mv{background:var(--accent-soft);color:var(--accent)}
+  .sheet .btn.ghost + .btn.ghost{margin-top:0}

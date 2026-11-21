@@ -70,6 +70,8 @@
 
     <!-- АПТЕЧКА -->
     <section id="view-list">
+      <div class="kitbar" id="kitbar"></div>
+      <div id="recSlot"></div>
       <div class="search">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5d6b67" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
         <input id="q" type="search" placeholder="Назва, діюча речовина, для чого…" autocomplete="off">
@@ -98,6 +100,7 @@
       </div>
 
       <form class="panel" id="medForm" autocomplete="off">
+        <div class="field" id="kitField" hidden><label for="f-kit">Аптечка</label><select id="f-kit"></select></div>
         <div class="field"><label for="f-name">Назва *</label><input id="f-name" required placeholder="Нурофєн" list="brands"></div>
         <div class="field"><label for="f-inn">Діюча речовина (через кому)</label><input id="f-inn" placeholder="ібупрофен">
           <div class="dup" id="dupHint"></div></div>
