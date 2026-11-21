@@ -202,7 +202,8 @@ function openKitForm(id){
     <label style="display:flex;gap:10px;align-items:flex-start;font-size:14px;margin-bottom:14px"><input type="checkbox" id="kitSmall" ${(k ? k.small : first) ? "checked" : ""} style="margin-top:3px">
       <span>Мала аптечка на щодень — показувати, що варто в ній мати</span></label>
     <div class="btnrow">${k ? `<button class="btn ghost" data-act="kit-del" data-id="${esc(k.id)}">Видалити</button>` : `<button class="btn ghost" data-act="close">Скасувати</button>`}
-      <button class="btn" data-act="kit-save" data-id="${esc(k ? k.id : "")}">Зберегти</button></div>`);
+      <button class="btn" data-act="kit-save" data-id="${esc(k ? k.id : "")}">Зберегти</button></div>
+    ${k && state.kits.length > 1 ? `<button class="btn ghost" style="margin-top:10px" data-act="kits-merge-open" data-id="${esc(k.id)}">Об'єднати з іншою аптечкою…</button>` : ""}`);
   setTimeout(() => $("#kitName") && $("#kitName").focus(), 50);
 }
 async function saveKitForm(id){
@@ -226,6 +227,47 @@ async function deleteKitYes(id){
   for (const m of state.meds.filter(m => m.kitId === id)) await moveMed(m.id, def, true);
   await store.deleteKit(state.hh.id, id);
   closeSheet(); setKit("all"); render(); toast("Аптечку видалено");
+}
+// Об'єднати дві аптечки: усе з «from» переходить у «to», однакові ліки зливаються в один запис, «from» видаляється
+function openMergeKits(fromId){
+  if (state.kits.length < 2) { toast("Для об'єднання потрібно щонайменше дві аптечки"); return; }
+  const opts = sel => state.kits.map(k => `<option value="${esc(k.id)}" ${k.id === sel ? "selected" : ""}>${esc(k.name)} · ${state.meds.filter(m => kitOf(m) === k.id).length} ліків</option>`).join("");
+  const from = fromId || (state.kits.find(k => !k.default) || state.kits[1]).id;
+  const to = (state.kits.find(k => k.id !== from && k.default) || state.kits.find(k => k.id !== from)).id;
+  openSheet(`<h3>Об'єднати аптечки</h3>
+    <p class="muted">Усі ліки з першої аптечки перейдуть у другу. Однакові ліки (та сама назва й дозування) стануть одним записом з усіма партіями. Перша аптечка після цього зникне.</p>
+    <div class="field"><label for="mkFrom">Звідки (ця аптечка зникне)</label><select id="mkFrom">${opts(from)}</select></div>
+    <div class="field"><label for="mkTo">Куди</label><select id="mkTo">${opts(to)}</select></div>
+    <div class="btnrow"><button class="btn ghost" data-act="close">Скасувати</button><button class="btn" data-act="kits-merge">Об'єднати</button></div>`);
+}
+async function mergeKits(fromId, toId){
+  if (!fromId || !toId || fromId === toId) { toast("Оберіть дві різні аптечки"); return false; }
+  const from = kitById(fromId), to = kitById(toId); if (!from || !to) return false;
+  const hid = state.hh.id;
+  const moving = state.meds.filter(m => kitOf(m) === fromId);
+  const staying = state.meds.filter(m => kitOf(m) === toId);
+  // групуємо за препаратом: ліки з «from» + наявні в «to»
+  const groups = new Map();
+  for (const m of [...staying, ...moving]) {
+    const k = prodName(m.name) + "|" + prodDose(m.strength);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(m);
+  }
+  let merged = 0, moved = 0;
+  for (const g of groups.values()) {
+    if (!g.some(m => kitOf(m) === fromId)) continue;              // у групі лише ліки «to» — нічого не робимо
+    if (g.length === 1) { await saveMed({ ...g[0], kitId: toId }); moved++; continue; }
+    const rec = { ...mergeRecords(g), kitId: toId };
+    if (!(await saveMed(rec))) continue;
+    for (const m of g) if (m.id !== rec.id) await store.deleteMed(hid, m.id);
+    merged++;
+  }
+  // якщо зникає основна аптечка — основною стає та, в яку переносимо
+  if (from.default) { const { id: _x, ...t } = to; await store.saveKit(hid, toId, { ...t, default: true }); }
+  await store.deleteKit(hid, fromId);
+  setKit(toId); closeSheet(); render();
+  toast(`«${from.name}» об'єднано з «${to.name}»: перенесено ${moved}, злито ${merged}`);
+  return true;
 }
 // Ключ препарату: назва без регістру/пробілів/®, є→е, ї→і; дозування — лише цифри й одиниці.
 const prodName = s => norm(String(s || "").replace(/[®™]/g, "")).replace(/є/g, "е").replace(/ї/g, "і").replace(/ґ/g, "г");
@@ -476,7 +518,8 @@ function openMenu(){
       : `<p class="muted" style="margin-top:12px">Додавати людей може власник аптечки.</p>`}
     <h3 style="margin-top:22px">Аптечки</h3>
     ${state.kits.length ? state.kits.map(k => `<div class="member"><span>${k.small ? "🎒" : "🧰"} ${esc(k.name)}${k.default ? " · основна" : ""} · ${state.meds.filter(m => kitOf(m) === k.id).length} ліків</span><button style="background:var(--accent-soft);color:var(--accent)" data-act="kit-edit" data-id="${esc(k.id)}">Змінити</button></div>`).join("") : `<p class="muted">Поки одна аптечка.</p>`}
-    <button class="linkbtn" data-act="kit-new">+ Нова аптечка</button>
+    <div class="smallbtns"><button class="linkbtn" data-act="kit-new">+ Нова аптечка</button>
+    ${state.kits.length > 1 ? `<button class="linkbtn" data-act="kits-merge-open">⇄ Об'єднати дві аптечки</button>` : ""}</div>
     <h3 style="margin-top:22px">Дані</h3>
     <button class="btn ghost" style="margin-bottom:8px" data-act="dups">Знайти й об'єднати повтори</button>
     <p class="muted">Резервна копія всіх ліків у JSON. Імпорт приймає і файл, експортований з версії в Claude.</p>
@@ -895,6 +938,8 @@ function bindUI(){
     if (a === "kit-edit") openKitForm(id);
     if (a === "kit-save") { b.disabled = true; await saveKitForm(id || null); }
     if (a === "kit-del") deleteKitAsk(id);
+    if (a === "kits-merge-open") openMergeKits(id || null);
+    if (a === "kits-merge") { b.disabled = true; if (!(await mergeKits($("#mkFrom").value, $("#mkTo").value))) b.disabled = false; }
     if (a === "kit-del-yes") { b.disabled = true; await deleteKitYes(id); }
     if (a === "del-yes") { b.disabled = true; try { await store.deleteMed(state.hh.id, id); closeSheet(); toast("Видалено"); } catch { toast("Не вдалося видалити"); b.disabled = false; } }
     if (a === "add-member") {
